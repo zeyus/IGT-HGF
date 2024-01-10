@@ -15,6 +15,54 @@ using CategoricalArrays
 
 theme(:dark)
 
+
+function add_scale_breaks!(
+    p::Plots.Plot,
+    axis::Symbol,
+    breaks::Vector{Float64},
+    break_symbol::String = "≠",
+    axis_offset::Float64 = 0.0,
+)::Plots.Plot
+    # add fake axis "breaks"
+    if axis == :x
+        p = annotate!(
+            p,
+            collect(
+                zip(
+                    zip(
+                        [1/(length(breaks)+1)*n for n in 1:(length(breaks))],
+                        [axis_offset for _ in 1:(length(breaks))],
+                    ),
+                    [text(
+                        break_symbol,
+                        0.3,
+                        p.attr[:foreground_color],
+                        :center,
+                    ) for _ in 1:(length(breaks))])),
+            textsize=0.5,
+        )
+        return p
+    end
+
+    p = annotate!(
+        p,
+        collect(
+            zip(
+                zip(
+                    [axis_offset for _ in 1:(length(breaks))],
+                    [1/(length(breaks)+1)*n for n in 1:(length(breaks))],
+                ),
+                [text(
+                    break_symbol,
+                    0.3,
+                    p.attr[:foreground_color],
+                    :center,
+                ) for _ in 1:(length(breaks))])),
+        textsize=0.5,
+    )
+    return p
+end
+
 """
     plot_subject_w_l_choices(
         subj::Int,
@@ -55,25 +103,14 @@ function plot_subject_w_l_choices(
         yscale=:identity,
         ylabel="Win amount",
     )
-    plot_fgcolor = p1.attr[:foreground_color]
+    
 
-    # add fake axis "breaks" between each amount on the y axis
-    break_symbol = "≠"
-    annotate!(
-        collect(
-            zip(
-                zip(
-                    [xannot_offset for _ in 1:(nwins-1)],
-                    [1/(nwins)*n for n in 1:(nwins-1)],
-                ),
-                [text(
-                    break_symbol,
-                    0.3,
-                    plot_fgcolor,
-                    :center,
-                ) for _ in 1:(nwins-1)])),
-        textsize=0.5,
+    p1 = add_scale_breaks!(
+        p1,
+        :y,
+        [1/(nwins)*n for n in 1:(nwins-1)],
     )
+
 
     p2 = scatter(
         x,
@@ -86,20 +123,10 @@ function plot_subject_w_l_choices(
         ylabel="Loss amount",
     )
 
-    annotate!(
-        collect(
-            zip(
-                zip(
-                    [xannot_offset for _ in 1:(nlosses-1)],
-                    [1/(nlosses)*n for n in 1:(nlosses-1)],
-                ),
-                [text(
-                    break_symbol,
-                    plot_fgcolor,
-                    0.3,
-                    :center,
-                ) for _ in 1:(nlosses-1)])),
-        textsize=0.5,
+    p2 = add_scale_breaks!(
+        p2,
+        :y,
+        [1/(nlosses)*n for n in 1:(nlosses-1)],
     )
 
     p3 = scatter(
