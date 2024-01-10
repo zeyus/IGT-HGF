@@ -11,6 +11,7 @@ using Plots: plot, plot!  # manual import to fix linting issue
 using Distributions
 using RData
 using Random
+using CategoricalArrays
 
 theme(:dark)
 
@@ -35,35 +36,88 @@ function plot_subject_w_l_choices(
     title::String = "IGT Subject Choices"
 )::Plots.Plot
     gr(size=(1200, 1200))
+    cwins = CategoricalArray(wins)
+    nwins = length(unique(wins))
+    closses = CategoricalArray(losses)
+    nlosses = length(unique(losses))
+    cchoices = CategoricalArray(choices)
+    ntrials = length(wins)
+    x = 1:ntrials
+    xannot_offset = 0
+
+
     p1 = scatter(
-        1:length(wins),
-        wins,
+        x,
+        cwins,
         label="Wins",
         legend=:outertop,
         markerstrokewidth=0.5,
+        yscale=:identity,
+        ylabel="Win amount",
+    )
+    plot_fgcolor = p1.attr[:foreground_color]
+
+    # add fake axis "breaks" between each amount on the y axis
+    break_symbol = "≠"
+    annotate!(
+        collect(
+            zip(
+                zip(
+                    [xannot_offset for _ in 1:(nwins-1)],
+                    [1/(nwins)*n for n in 1:(nwins-1)],
+                ),
+                [text(
+                    break_symbol,
+                    0.3,
+                    plot_fgcolor,
+                    :center,
+                ) for _ in 1:(nwins-1)])),
+        textsize=0.5,
     )
 
     p2 = scatter(
-        1:length(losses),
-        losses,
+        x,
+        closses,
         label="Losses",
         legend=:outertop,
         markerstrokewidth=0.5,
+        yscale=:identity,
+        ydiscrete_values=0:100:1000,
+        ylabel="Loss amount",
+    )
+
+    annotate!(
+        collect(
+            zip(
+                zip(
+                    [xannot_offset for _ in 1:(nlosses-1)],
+                    [1/(nlosses)*n for n in 1:(nlosses-1)],
+                ),
+                [text(
+                    break_symbol,
+                    plot_fgcolor,
+                    0.3,
+                    :center,
+                ) for _ in 1:(nlosses-1)])),
+        textsize=0.5,
     )
 
     p3 = scatter(
-        1:length(choices),
-        choices,
+        x,
+        cchoices,
         label="Choices",
         legend=:outertop,
         markerstrokewidth=0.5,
+        yscale=:identity,
+        ylabel="Deck Choice",
     )
 
     p4 = plot(
-        1:length(wins),
+        x,
         cumsum(wins .+ losses),
         label="Wins+Losses",
         legend=:outertop,
+        ylabel="Balance",
     )
 
     return plot(
@@ -73,6 +127,8 @@ function plot_subject_w_l_choices(
         p4,
         layout=(2,2),
         plot_title="$title: $subj ($study)",
+        xlabel="Trial",
+        link=:x,
     )
 end
 
