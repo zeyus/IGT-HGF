@@ -38,7 +38,7 @@ function add_scale_breaks!(
     # nudge so breaks are centered between ticks
     nudge = (1.0 - w_fact) / 2.0
     # distance between breaks
-    break_dist = w_fact/(n_breaks+1)
+    break_dist = w_fact/(n_breaks + 1)
     # all break locations
     breaks = [(break_dist*n)+nudge for n in 1:(n_breaks)]
     break_line = [axis_offset for _ in 1:(length(breaks))]
@@ -122,7 +122,6 @@ function plot_subject_w_l_choices(
         legend=:outertop,
         markerstrokewidth=0.5,
         yscale=:identity,
-        ydiscrete_values=0:100:1000,
         ylabel="Loss amount",
     )
     p2 = add_scale_breaks!(
@@ -156,7 +155,7 @@ function plot_subject_w_l_choices(
         p2,
         p3,
         p4,
-        layout=(2,2),
+        layout=(2, 2),
         plot_title="$title: $subj ($study)",
         xlabel="Trial",
         link=:x,
@@ -190,7 +189,7 @@ function load_trial_data(
             # list of  subjects
             "subj" => parse.(Int, objs["index_$l"][: , 1]),
             # the study author
-            "study" => objs["index_$l"][: , 2],
+            "study" => objs["index_$l"][:, 2],
             # participant choice
             "choice" => transpose(trunc.(Int, objs["choice_$l"])),
             # participant wins
