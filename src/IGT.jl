@@ -15,49 +15,55 @@ using CategoricalArrays
 
 theme(:dark)
 
+"""
+    add_scale_breaks!(
+        p::Plots.Plot,
+        axis::Symbol,
+        n_breaks::Int,
+        break_symbol::String = "≠",
+        axis_offset::Float64 = 0.0,
+    )::Plots.Plot
 
+Add scale breaks to a plot.
+"""
 function add_scale_breaks!(
     p::Plots.Plot,
     axis::Symbol,
-    breaks::Vector{Float64},
+    n_breaks::Int,
     break_symbol::String = "≠",
     axis_offset::Float64 = 0.0,
 )::Plots.Plot
-    # add fake axis "breaks"
-    if axis == :x
-        p = annotate!(
-            p,
-            collect(
-                zip(
-                    zip(
-                        [1/(length(breaks)+1)*n for n in 1:(length(breaks))],
-                        [axis_offset for _ in 1:(length(breaks))],
-                    ),
-                    [text(
-                        break_symbol,
-                        0.3,
-                        p.attr[:foreground_color],
-                        :center,
-                    ) for _ in 1:(length(breaks))])),
-            textsize=0.5,
+    # default is 1.06: see https://docs.juliaplots.org/latest/generated/attributes_axis/
+    w_fact = p.subplots[1].attr[axis].plotattributes[:widen] == :auto ? 1.06 : p.attr[axis][:widen]
+    # nudge so breaks are centered between ticks
+    nudge = (1.0 - w_fact) / 2.0
+    # distance between breaks
+    break_dist = w_fact/(n_breaks+1)
+    # all break locations
+    breaks = [(break_dist*n)+nudge for n in 1:(n_breaks)]
+    break_line = [axis_offset for _ in 1:(length(breaks))]
+    break_text = [text(
+        break_symbol,
+        0.3,
+        p.attr[:foreground_color],
+        :center,
+    ) for _ in 1:(length(breaks))]
+
+    # Annotations are a vector of tuples of ((x, y), text)
+    # if they use relative (%) positions.
+    break_xytxt = collect(
+        zip(
+            zip(
+                axis == :xaxis ? breaks : break_line,
+                axis == :xaxis ? break_line : breaks,
+            ),
+            break_text
         )
-        return p
-    end
+    )
 
     p = annotate!(
         p,
-        collect(
-            zip(
-                zip(
-                    [axis_offset for _ in 1:(length(breaks))],
-                    [1/(length(breaks)+1)*n for n in 1:(length(breaks))],
-                ),
-                [text(
-                    break_symbol,
-                    0.3,
-                    p.attr[:foreground_color],
-                    :center,
-                ) for _ in 1:(length(breaks))])),
+        break_xytxt,
         textsize=0.5,
     )
     return p
@@ -91,9 +97,8 @@ function plot_subject_w_l_choices(
     cchoices = CategoricalArray(choices)
     ntrials = length(wins)
     x = 1:ntrials
-    xannot_offset = 0
 
-
+    # plot the wins
     p1 = scatter(
         x,
         cwins,
@@ -103,15 +108,13 @@ function plot_subject_w_l_choices(
         yscale=:identity,
         ylabel="Win amount",
     )
-    
-
     p1 = add_scale_breaks!(
         p1,
-        :y,
-        [1/(nwins)*n for n in 1:(nwins-1)],
+        :yaxis,
+        nwins-1,
     )
 
-
+    # plot the losses
     p2 = scatter(
         x,
         closses,
@@ -122,13 +125,13 @@ function plot_subject_w_l_choices(
         ydiscrete_values=0:100:1000,
         ylabel="Loss amount",
     )
-
     p2 = add_scale_breaks!(
         p2,
-        :y,
-        [1/(nlosses)*n for n in 1:(nlosses-1)],
+        :yaxis,
+        nlosses-1,
     )
 
+    # plot subject choices
     p3 = scatter(
         x,
         cchoices,
@@ -139,6 +142,7 @@ function plot_subject_w_l_choices(
         ylabel="Deck Choice",
     )
 
+    # plot running total
     p4 = plot(
         x,
         cumsum(wins .+ losses),
@@ -262,7 +266,7 @@ trial_data = load_trial_data("data/IGTdataSteingroever2014/IGTdata.rdata")
 
 random_trial_data = random_trial(trial_data)
 
-plot_subject_w_l_choices(
+p = plot_subject_w_l_choices(
     random_trial_data["subj"],
     random_trial_data["study"],
     random_trial_data["wins"],
