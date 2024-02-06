@@ -4,6 +4,7 @@ using Plots, StatsPlots
 using ActionModels
 using Distributed
 using HierarchicalGaussianFiltering
+include("Data.jl")
 
 @model function test(inputs::Vector, actions::Vector)
     σ ~ LogNormal(0, 1)
@@ -243,6 +244,7 @@ function igt_hgf_action(agent::Agent, input::Real)
 
     # final action distribution is Categorical
     action_distribution = Categorical(action_probabilities)
+    return action_distribution    
 end
 
 # input_nodes = [

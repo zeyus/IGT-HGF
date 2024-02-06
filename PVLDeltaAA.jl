@@ -7,73 +7,17 @@ using Turing
 using FillArrays
 using Memoization
 using StatsFuns
-using DataFrames
-using RData
+
+include("src/Data.jl")
+
+
 
 
 Turing.setprogress!(true)
 
-"""
-    load_trial_data(
-        filename::String,
-    )::Dict{String, Dict{String, Any}}
-
-Load the trial data from the IGT data file.
-"""
-function load_trial_data(
-    filename::String,
-)::DataFrame
-    # load the data
-    objs = load(filename)
-
-    # set trial lengths (str for indices)
-    trials_label = ["95", "100", "150"]
-
-    # create a trial data dictionary
-    trial_data = Dict()
-
-    # create dataframe
-    df = DataFrame(
-        subj = Int[],
-        trial_idx = Int[],
-        study = String[],
-        choice = Int[],
-        wins = Float64[],
-        losses = Float64[],
-        trial_length = Int[],
-        outcome = Float64[],
-    )
-
-    # populate the trial data dictionary
-    for l in trials_label
-        subj = parse.(Int, objs["index_$l"][: , 1])
-        study = objs["index_$l"][:, 2]
-        wins = Float64.(objs["wi_$l"])
-        losses = Float64.(objs["lo_$l"])
-        choice_t = transpose(trunc.(Int, objs["choice_$l"]))
-        print(typeof(choice_t[:, 1]), "\n")
-        for i in eachindex(subj)
-            n_trials = length(losses[i, :])
-            for j in 1:n_trials
-                push!(df, (
-                    subj[i],
-                    j,
-                    study[i],
-                    choice_t[j, i],
-                    wins[i, j],
-                    losses[i, j],
-                    n_trials,
-                    wins[i, j] - losses[i, j]
-                ))
-            end
-        end
-    end
-
-    return df
-end
 
 Φ(x::Real) = cdf(Normal(0, 1), x)
-@model function hierarchical_softmax(N::Int, Tsubj::Vector{Int}, choice::Matrix{Int}, outcome::Matrix{Float64}, ::Type{T} = Float64) where {T}
+@model function pvl_delta(N::Int, Tsubj::Vector{Int}, choice::Matrix{Int}, outcome::Matrix{Float64}, ::Type{T} = Float64) where {T}
     # Hyperparameters
     A_mu_pr ~ Normal(0, 1)
     A_sigma ~ Uniform(0, 1.5)
@@ -129,71 +73,21 @@ end
 end
 
 
-N = 5  # Number of subjects
-T = 50   # Max number of trials
-Tsubj = rand(1:T, N)  # Number of trials per subject
-choice = rand(1:4, N, T)  # Choices
-outcome = randn(N, T)  # Outcomes
-
-model = hierarchical_softmax(N, Tsubj, choice, outcome)
-
-chain = sample(model, NUTS(), MCMCThreads(), 1000, 4, progress=true, verbose=true)
-# chain = sample(model, HMC(0.1, 5), 1000)
-plot(chain)
-
-# let's try with real data
-trial_data = load_trial_data("./data/IGTdataSteingroever2014/IGTdata.rdata")
-
-# get a random trial of length 100
-trial_data_100 = trial_data[trial_data.trial_length .== 100, :]
-subjs = unique(trial_data_100.subj)
-rand_subj = subjs[rand(1:length(subjs))]
-rand_trial = trial_data_100[trial_data_100.subj .== rand_subj, :]
-
-N = 1  # Number of subjects
-T = 100
-Tsubj = [T]
-choice = reshape(rand_trial.choice, (N, T))
-outcome = reshape(rand_trial.outcome, (N, T))
-
-model = hierarchical_softmax(N, Tsubj, choice, outcome)
-
-chain = sample(model, NUTS(), MCMCThreads(), 1000, 4, progress=true, verbose=true)
-
-plot(chain)
 
 
-# now with all 95 subjects
-trial_data_95 = trial_data[trial_data.trial_length .== 95, :]
-subjs = unique(trial_data_95.subj)
-N = length(subjs)
-T = 95
-Tsubj = fill(T, N)
-choice = reshape(trial_data_95.choice, (N, T))
-outcome = reshape(trial_data_95.outcome, (N, T))
 
-model = hierarchical_softmax(N, Tsubj, choice, outcome)
 
-chain = sample(model, HMC(0.05, 10), MCMCThreads(), 1000, 4, progress=true, verbose=true)
 
-# print chain indices/symbols
-print(chain)
-describe(chain)
-plot(chain[:"A_mu_pr"])
-plot(chain[:"alpha_mu_pr"])
-plot(chain[:"cons_mu_pr"])
-plot(chain[:"lambda_mu_pr"])
-# plot posterior distribution for group-level parameters
-density(chain[:"A_mu_pr"])
-density(chain[:"alpha_mu_pr"])
-density(chain[:"cons_mu_pr"])
-density(chain[:"lambda_mu_pr"])
-histogram(chain)
 
-pchain = predict(model, chain)
-pchain
-names(pchain)
 
+
+
+
+
+
+##############################################
+# Simulated Data                             #
+##############################################
 
 function igt_deck_payoff(x::Int)
     if x == 1
@@ -265,12 +159,9 @@ for i in 1:N
         ev[i, simulated_choice[i, t]] += A[i] * (curUtil - ev[simulated_choice[i, t]])
     end
 end
-simulated_choice
-N
 
-simulated_outcome
-Tsubj
-model = hierarchical_softmax(N, Tsubj, simulated_choice, simulated_outcome)
+
+model = pvl_delta(N, Tsubj, simulated_choice, simulated_outcome)
 
 chain = sample(model, HMC(0.05, 10), MCMCThreads(), 1000, 4, progress=true, verbose=true)
 
@@ -300,10 +191,10 @@ for i in 1:N
     i_lambda_pr[i] = mode(chain[Symbol("lambda_pr[$i]")])
 end
 
-g_A_mode = mode(Φ(g_A_mu_pr_mode .+ g_A_sigma_mode * i_A_pr))
-g_alpha_mode = mode(Φ(g_alpha_mu_pr_mode .+ g_alpha_sigma_mode * i_alpha_pr))
-g_cons_mode = mode(Φ(g_cons_mu_pr_mode .+ g_cons_sigma_mode * i_cons_pr))
-g_lambda_mode = mode(Φ(g_lambda_mu_pr_mode .+ g_lambda_sigma_mode * i_lambda_pr))
+g_A_mode = mean(Φ.(g_A_mu_pr_mode .+ g_A_sigma_mode * i_A_pr))
+g_alpha_mode = mean(Φ.(g_alpha_mu_pr_mode .+ g_alpha_sigma_mode * i_alpha_pr) .* 2)
+g_cons_mode = mean(Φ.(g_cons_mu_pr_mode .+ g_cons_sigma_mode * i_cons_pr) .* 5)
+g_lambda_mode = mean(Φ.(g_lambda_mu_pr_mode .+ g_lambda_sigma_mode * i_lambda_pr) .* 10)
 
 
 i_A = Matrix{Real}(undef, N, 3)
@@ -339,25 +230,25 @@ i_lambda = sortslices(i_lambda, dims=1, lt=(x,y) -> x[1] < y[1])
 p1 = plot(1:N, i_A[:, 1], label="Simulated A", xlabel="Subject", ylabel="A", title="A group and individual level")
 plot!(1:N, i_A[:, 3], label="Recovered A", line=:dash)
 plot!([1, N], [g_A_mode, g_A_mode], label="Recovered group level mode", line=:dash)
-plot!([1, N], [mode(A), mode(A)], label="Group level mode", line=:dot)
+plot!([1, N], [mean(A), mean(A)], label="Group level mode", line=:dot)
 
 # plot alpha with line for group level mode and recovered group level mode
 p2 = plot(1:N, i_alpha[:, 1], label="Simulated alpha", xlabel="Subject", ylabel="alpha", title="alpha group and individual level")
 plot!(1:N, i_alpha[:, 3], label="Recovered alpha", line=:dash)
 plot!([1, N], [g_alpha_mode, g_alpha_mode], label="Recovered group level mode", line=:dash)
-plot!([1, N], [mode(alpha), mode(alpha)], label="Group level mode", line=:dot)
+plot!([1, N], [mean(alpha), mean(alpha)], label="Group level mode", line=:dot)
 
 # plot cons with line for group level mode and recovered group level mode
 p3 = plot(1:N, i_cons[:, 1], label="Simulated cons", xlabel="Subject", ylabel="cons", title="cons group and individual level")
 plot!(1:N, i_cons[:, 3], label="Recovered cons", line=:dash)
 plot!([1, N], [g_cons_mode, g_cons_mode], label="Recovered group level mode", line=:dash)
-plot!([1, N], [mode(cons), mode(cons)], label="Group level mode", line=:dot)
+plot!([1, N], [mean(cons), mean(cons)], label="Group level mode", line=:dot)
 
 # plot lambda with line for group level mode and recovered group level mode
 p4 = plot(1:N, i_lambda[:, 1], label="Simulated lambda", xlabel="Subject", ylabel="lambda", title="lambda group and individual level")
 plot!(1:N, i_lambda[:, 3], label="Recovered lambda", line=:dash)
 plot!([1, N], [g_lambda_mode, g_lambda_mode], label="Recovered group level mode", line=:dash)
-plot!([1, N], [mode(lambda), mode(lambda)], label="Group level mode", line=:dot)
+plot!([1, N], [mean(lambda), mean(lambda)], label="Group level mode", line=:dot)
 
 plot(p1, p2, p3, p4, layout=(2, 2), legend=:outertop, size=(1600, 1600))
 
@@ -365,9 +256,69 @@ plot(p1, p2, p3, p4, layout=(2, 2), legend=:outertop, size=(1600, 1600))
 
 
 
+
+##############################################
+# Real Data                                  #
+##############################################
+
+
+# let's try with real data
+trial_data = load_trial_data("./data/IGTdataSteingroever2014/IGTdata.rdata")
+
+# all 95 subjects
+trial_data_95 = trial_data[trial_data.trial_length .== 95, :]
+subjs = unique(trial_data_95.subj)
+N = length(subjs)
+T = 95
+Tsubj = fill(T, N)
+choice = reshape(trial_data_95.choice, (N, T))
+outcome = reshape(trial_data_95.outcome, (N, T))
+
+model = pvl_delta(N, Tsubj, choice, outcome)
+
+chain = sample(model, HMC(0.05, 10), MCMCThreads(), 1000, 4, progress=true, verbose=true)
+
+# print chain indices/symbols
+print(chain)
+describe(chain)
+plot(chain[:"A_mu_pr"])
+plot(chain[:"alpha_mu_pr"])
+plot(chain[:"cons_mu_pr"])
+plot(chain[:"lambda_mu_pr"])
+# plot posterior distribution for group-level parameters
+density(chain[:"A_mu_pr"])
+density(chain[:"alpha_mu_pr"])
+density(chain[:"cons_mu_pr"])
+density(chain[:"lambda_mu_pr"])
+histogram(chain)
+
+pchain = predict(model, chain)
+pchain
+names(pchain)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+print("Byeeeee...")
+print("Byeeeee...")
+
 exit()
 
 
+##############################################
+# Broken Garbage                             #
+##############################################
 
 
 # nsubs = 1
