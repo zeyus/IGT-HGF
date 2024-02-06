@@ -205,37 +205,6 @@ plot_parameter_distribution(result, priors)
 # for Multilevel
 # learning_rate = MultiLevel(...)
 
-result = fit_model(
-    hgf_agent,
-    priors,
-    dataframe,
-    independent_group_cols = [:experiment],
-    # if you want to fit seperately for each subject
-    # this will run a lot faster
-    # independent_group_cols = [:experiment, :ID],
-    multilevel_group_cols = [:ID, :group],
-    input_cols = [:input],
-    action_cols = [:action],
-)
-
-
-# Which HGF agent?
-
-function igt_action_pvl(agent::Agent, input::Real)
-    # input is a value, the outcome of the deck, negative or positive
-
-    agent.parameters["action_noise"] = 1 # ...
-    # prospect_learning_step
-
-    # pvl_delta_step
-    # Expected values come from the HGF
-    expected_values = [1, -10, 3, 1]
-
-    action_probabilities = softmax(expected_values, action_noise)
-
-    # final action distribution is Categorical
-    action_distribution = Categorical(action_probabilities)
-end
 
 function softmax(x, action_noise)
     return exp.(x ./ action_noise) ./ sum(exp.(x ./ action_noise))
@@ -407,3 +376,17 @@ get_parameters(hgf) # lots
 
 
 # one day active inference.
+
+result = fit_model(
+    hgf_agent,
+    priors,
+    dataframe,
+    independent_group_cols = [:experiment],
+    # if you want to fit seperately for each subject
+    # this will run a lot faster
+    # independent_group_cols = [:experiment, :ID],
+    multilevel_group_cols = [:ID, :group],
+    input_cols = [:input],
+    action_cols = [:action],
+    n_cores = 4,
+)
