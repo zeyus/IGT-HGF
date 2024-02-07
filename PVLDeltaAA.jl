@@ -5,7 +5,6 @@ using ActionModels
 using Distributed
 using Turing
 using FillArrays
-using Memoization
 using StatsFuns
 
 include("src/Data.jl")
@@ -89,23 +88,6 @@ end
 # Simulated Data                             #
 ##############################################
 
-function igt_deck_payoff(x::Int)
-    if x == 1
-        # 50/50 chance of 100 or loss of 150-350
-        outcome = rand(Bool) ? 100 : -rand(150:350)
-    elseif x == 2
-        # 9:1 chance of 100:1250
-        outcome = rand(1:10) == 1 ? -1250 : 100
-    elseif x == 3
-        # 50/50 chance of 50 or lose 50
-        outcome = rand(Bool) ? 50 : -50
-    elseif x == 4
-        # 9:1 chance of 100:250
-        outcome = rand(1:10) == 1 ? -250 : 100
-    end
-    return Float64(outcome)
-end
-
 # now let's simulate some data
 N = 15  # Number of subjects
 T = 95   # Max number of trials
@@ -136,33 +118,33 @@ lambda = Φ.(lambda_mu_pr .+ lambda_sigma .* lambda_pr) .* 10
 simulated_choice = zeros(Int, N, T)
 simulated_outcome = zeros(Float64, N, T)
 
+
 for i in 1:N
     # Define values
     ev = zeros(T, 4)
     curUtil = 0.0
     theta = 0.0
-
+    # each subject gets their own decks
+    payoff_scheme = construct_payoff_sequence(1)
     # Initialize values
     theta = 3^cons[i] - 1
-
     for t in 1:Tsubj[i]
         # softmax choice
         simulated_choice[i, t] = rand(Categorical(softmax(theta .* ev[i, :])))
-        simulated_outcome[i, t] = igt_deck_payoff(simulated_choice[i, t])
+        # get the result for the selected deck
+        simulated_outcome[i, t] = igt_deck_payoff!(simulated_choice[i, 1:t], payoff_scheme)
         if simulated_outcome[i, t] >= 0
             curUtil = simulated_outcome[i, t]^alpha[i]
         else
             curUtil = -1 * lambda[i] * (-1 * simulated_outcome[i, t])^alpha[i]
         end
-
         # delta
         ev[i, simulated_choice[i, t]] += A[i] * (curUtil - ev[simulated_choice[i, t]])
     end
 end
 
-
+# now let's fit the model to the simulated data
 model = pvl_delta(N, Tsubj, simulated_choice, simulated_outcome)
-
 chain = sample(model, HMC(0.05, 10), MCMCThreads(), 1000, 4, progress=true, verbose=true)
 
 # get mode for the 4 parameters

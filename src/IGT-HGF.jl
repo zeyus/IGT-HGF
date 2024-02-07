@@ -21,7 +21,7 @@ end
     # input is a value, the outcome of the deck, negative or positive
 
     # get action_noise parameter
-    action_noise = agent.parameters["action_noise"] # ...
+    action_noise = agent.parameters["action_noise"]
 
     # get previously selected deck
     prev_action = agent.states["action"]
@@ -179,5 +179,15 @@ rmprocs(workers())
 # because we have individual level, the result is a dict of chains
 # try with one example
 result_1 = result[(1, 95)]
+plot(result_1)
 
-plot_parameter_distribution(result, ("x1", "volatility"))
+
+plot_trajectory(agent, ("u1", "input_value"))
+
+print(get_parameters(agent))
+print(get_states(agent))
+
+print(get_parameters(hgf))
+print(get_states(hgf))
+
+plot_trajectory(hgf, "")
