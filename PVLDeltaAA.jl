@@ -6,6 +6,7 @@ using Distributed
 using Turing
 using FillArrays
 using StatsFuns
+using JLD
 
 include("src/Data.jl")
 
@@ -144,21 +145,24 @@ for i in 1:N
 end
 
 # now let's fit the model to the simulated data
-model = pvl_delta(N, Tsubj, simulated_choice, simulated_outcome)
-chain = sample(model, HMC(0.05, 10), MCMCThreads(), 1000, 4, progress=true, verbose=true)
+sim_model = pvl_delta(N, Tsubj, simulated_choice, simulated_outcome)
+sim_chain = sample(sim_model, HMC(0.05, 10), MCMCThreads(), 1000, 4, progress=true, verbose=true)
+
+# save chain
+save("./data/pvl_sim_chain.jld", "chain", sim_chain, compress=true)
 
 # get mode for the 4 parameters
-g_A_mu_pr_mode = mode(chain[:"A_mu_pr"])
-g_A_sigma_mode = mode(chain[:"A_sigma"])
+g_A_mu_pr_mode = mode(sim_chain[:"A_mu_pr"])
+g_A_sigma_mode = mode(sim_chain[:"A_sigma"])
 
-g_alpha_mu_pr_mode = mode(chain[:"alpha_mu_pr"])
-g_alpha_sigma_mode = mode(chain[:"alpha_sigma"])
+g_alpha_mu_pr_mode = mode(sim_chain[:"alpha_mu_pr"])
+g_alpha_sigma_mode = mode(sim_chain[:"alpha_sigma"])
 
-g_cons_mu_pr_mode = mode(chain[:"cons_mu_pr"])
-g_cons_sigma_mode = mode(chain[:"cons_sigma"])
+g_cons_mu_pr_mode = mode(sim_chain[:"cons_mu_pr"])
+g_cons_sigma_mode = mode(sim_chain[:"cons_sigma"])
 
-g_lambda_mu_pr_mode = mode(chain[:"lambda_mu_pr"])
-g_lambda_sigma_mode = mode(chain[:"lambda_sigma"])
+g_lambda_mu_pr_mode = mode(sim_chain[:"lambda_mu_pr"])
+g_lambda_sigma_mode = mode(sim_chain[:"lambda_sigma"])
 
 
 # get the modes for each subject
@@ -167,10 +171,10 @@ i_alpha_pr = fill(NaN, N)
 i_cons_pr = fill(NaN, N)
 i_lambda_pr = fill(NaN, N)
 for i in 1:N
-    i_A_pr[i] = mode(chain[Symbol("A_pr[$i]")])
-    i_alpha_pr[i] = mode(chain[Symbol("alpha_pr[$i]")])
-    i_cons_pr[i] = mode(chain[Symbol("cons_pr[$i]")])
-    i_lambda_pr[i] = mode(chain[Symbol("lambda_pr[$i]")])
+    i_A_pr[i] = mode(sim_chain[Symbol("A_pr[$i]")])
+    i_alpha_pr[i] = mode(sim_chain[Symbol("alpha_pr[$i]")])
+    i_cons_pr[i] = mode(sim_chain[Symbol("cons_pr[$i]")])
+    i_lambda_pr[i] = mode(sim_chain[Symbol("lambda_pr[$i]")])
 end
 
 g_A_mode = mean(Φ.(g_A_mu_pr_mode .+ g_A_sigma_mode * i_A_pr))
@@ -234,10 +238,17 @@ plot!([1, N], [mean(lambda), mean(lambda)], label="Group level mode", line=:dot)
 
 plot(p1, p2, p3, p4, layout=(2, 2), legend=:outertop, size=(1600, 1600))
 
+# save plot
+savefig("./figures/pvl_simulated_data.png")
+
+# save chain summary / info to file
 
 
-
-
+io = open("./data/pvl_sim_chain_summary.txt", "w")
+show(io, MIME("text/plain"), sim_chain)
+show(io, MIME("text/plain"), summarize(sim_chain))
+show(io, MIME("text/plain"), hpd(sim_chain))
+close(io)
 
 ##############################################
 # Real Data                                  #
@@ -260,24 +271,18 @@ model = pvl_delta(N, Tsubj, choice, outcome)
 
 chain = sample(model, HMC(0.05, 10), MCMCThreads(), 1000, 4, progress=true, verbose=true)
 
-# print chain indices/symbols
-print(chain)
-describe(chain)
-plot(chain[:"A_mu_pr"])
-plot(chain[:"alpha_mu_pr"])
-plot(chain[:"cons_mu_pr"])
-plot(chain[:"lambda_mu_pr"])
-# plot posterior distribution for group-level parameters
-density(chain[:"A_mu_pr"])
-density(chain[:"alpha_mu_pr"])
-density(chain[:"cons_mu_pr"])
-density(chain[:"lambda_mu_pr"])
-histogram(chain)
+# save chain
+save("./data/pvl_data_95_chain.jld", "chain", chain, compress=true)
 
-pchain = predict(model, chain)
-pchain
-names(pchain)
+# save chain summary / info to file
+io = open("./data/pvl_data_95_chain_summary.txt", "w")
+show(io, MIME("text/plain"), chain)
+show(io, MIME("text/plain"), summarize(chain))
+show(io, MIME("text/plain"), hpd(chain))
+close(io)
 
+s = summarize(chain)
+plot(summarize(chain))
 
 
 
