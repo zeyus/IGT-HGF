@@ -4,15 +4,10 @@ using Random
 using ForwardDiff: Dual, value
 Base.Integer(x::Dual) = Integer(value(x))
 
-"""
-    load_trial_data(
-        filename::String,
-    )::DataFrame
 
-Load the trial data from the IGT data file.
-"""
 function load_trial_data(
     filename::String,
+    add_missing_input::Bool = false
 )::DataFrame
     # load the data
     objs = load(filename)
@@ -36,15 +31,16 @@ function load_trial_data(
 
     # create dataframe
     df = DataFrame(
-        subj = Int[],
-        trial_idx = Int[],
-        study = String[],
-        choice = Int[],
-        wins = Float64[],
-        losses = Float64[],
-        trial_length = Int[],
-        outcome = Float64[],
-        scheme = Int[],
+        subj = Union{Missing, Int}[],
+        trial_idx = Union{Missing, Int}[],
+        study = Union{Missing, String}[],
+        choice = Union{Missing, Int}[],
+        wins = Union{Missing, Float64}[],
+        losses = Union{Missing, Float64}[],
+        trial_length = Union{Missing, Int}[],
+        outcome = Union{Missing, Float64}[],
+        scheme = Union{Missing, Int}[],
+        next_choice = Union{Missing, Int}[],
     )
 
     # populate the trial data dictionary
@@ -56,7 +52,22 @@ function load_trial_data(
         choice_t = transpose(trunc.(Int, objs["choice_$l"]))
         for i in eachindex(subj)
             n_trials = length(losses[i, :])
+            if add_missing_input
+                push!(df, (
+                    subj[i],
+                    0,
+                    study[i],
+                    missing,
+                    missing,
+                    missing,
+                    n_trials,
+                    missing,
+                    scheme_map[study[i]],
+                    choice_t[1, i],
+                ))
+            end
             for j in 1:n_trials
+                next_choice = j < n_trials ? choice_t[j + 1, i] : missing
                 push!(df, (
                     subj[i],
                     j,
@@ -67,6 +78,7 @@ function load_trial_data(
                     n_trials,
                     wins[i, j] + losses[i, j],
                     scheme_map[study[i]],
+                    next_choice,
                 ))
             end
         end
@@ -197,8 +209,8 @@ function construct_payoff_sequence(scheme::Int)::PayoffSequence
 end
 
 
-function igt_deck_payoff!(choice_history::Vector, payoffs::PayoffSequence)::Float64
-    choice_history = Integer.(value(choice_history))
+function igt_deck_payoff!(choice_history::Vector{T}, payoffs::PayoffSequence, ::Type{T} = Int)::Float64 where {T<:Integer}
+    # choice_history = Integer.(value(choice_history))
     # get last selection
     deck = last(choice_history)
     # get the number of times this deck has been selected previously

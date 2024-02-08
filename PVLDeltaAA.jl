@@ -17,7 +17,7 @@ include("src/Data.jl")
 Turing.setprogress!(true)
 
 
-@model function pvl_delta(N::I, Tsubj::Vector{I}, choice::Matrix{Union{Missing, I}}, payoff_scheme::Int = 1, ::Type{I} = Int, ::Type{T} = Float64) where {I<:Int, T}
+@model function pvl_delta(N::Int, Tsubj::Vector{I}, choice::Matrix{Union{Missing, I}}, payoff_scheme::Int = 1, ::Type{I} = Int16, ::Type{T} = Float64) where {I<:Integer, T}
     # Group Level Parameters
     Aμ ~ Normal(0, 1)
     Aσ ~ Uniform(0, 1.5)
@@ -45,13 +45,15 @@ Turing.setprogress!(true)
             # Get choice probabilities (random on first trial, otherwise softmax of expected utility)
             choice_proabilities = t == 1 ? fill(0.25, 4) : softmax(θ .* Evₖ[t-1, :])
             # softmax choice
-            choice[i, t] ~ Categorical(choice_proabilities)
+            k₀ ~ Categorical(choice_proabilities)
             # get the result for the selected deck
-            Xₜ = igt_deck_payoff!(value(choice[i, 1:t]), payoffs)
+            k = Int16(value(k₀))
+            choice[i, t] = k
+            Xₜ = igt_deck_payoff!(choice[i, 1:t], payoffs)
             # get prospect utility
             uₖ = (Xₜ >= 0) ? Xₜ^A[i] : -ω[i] * abs(Xₜ)^A[i]
             
-            k = Integer(value(choice[i, t]))
+            
             # delta learning rule
             # update selected deck
             Evₖ₋₁ = t == 1 ? fill(0.0, 4) : Evₖ[t-1, :]
@@ -65,8 +67,8 @@ end
 
 
 N = 15
-Tsubj = fill(95, N)
-simulated_choice = Matrix{Union{Missing, Int}}(undef, N, 95)
+Tsubj = Vector{Int16}(fill(95, N))
+simulated_choice = Matrix{Union{Missing, Int16}}(fill(missing, N, 95))
 
 # now let's fit the model to the simulated data
 sim_model = pvl_delta(N, Tsubj, simulated_choice)

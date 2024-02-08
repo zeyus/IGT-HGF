@@ -20,7 +20,7 @@ addprocs(4)
     return exp.(x / noise) / sum(exp.(x / noise))
 end
 
-@everywhere function igt_hgf_action(agent::Agent, input::Real)
+@everywhere function igt_hgf_action(agent::Agent, input::Union{Missing, Real})
     # input is a value, the outcome of the deck, negative or positive
 
     # get action_noise parameter
@@ -110,7 +110,7 @@ end
 ]
 
 @everywhere shared_parameters = Dict(
-                        # value, names of all derived parameters
+    # value, names of all derived parameters
     "u_input_noise" => (
         1, 
         [
@@ -129,19 +129,81 @@ end
             ("x4", "volatility")
         ],
     ),
+    "x_autoregression_strength" => (
+        0,
+        [
+            ("x1", "autoregression_strength"),
+            ("x2", "autoregression_strength"),
+            ("x3", "autoregression_strength"),
+            ("x4", "autoregression_strength")
+        ],
+    ),
+    "x_autoregression_target" => (
+        0,
+        [
+            ("x1", "autoregression_target"),
+            ("x2", "autoregression_target"),
+            ("x3", "autoregression_target"),
+            ("x4", "autoregression_target")
+        ],
+    ),
+    "x_initial_mean" => (
+        0,
+        [
+            ("x1", "initial_mean"),
+            ("x2", "initial_mean"),
+            ("x3", "initial_mean"),
+            ("x4", "initial_mean")
+        ],
+    ),
+    "x_drift" => (
+        0,
+        [
+            ("x1", "drift"),
+            ("x2", "drift"),
+            ("x3", "drift"),
+            ("x4", "drift")
+        ],
+    ),
+    "u_value_coupling" => (
+        1,
+        [
+            ("u1", "x1", "value_coupling"),
+            ("u2", "x2", "value_coupling"),
+            ("u3", "x3", "value_coupling"),
+            ("u4", "x4", "value_coupling")
+        ],
+    ),
+    # do same for
+    # strength, target, mean, drift (everything in get_parameters(hgf))
 )
 
+#set_parameters!(hgf, Dict("x_volatility" => 1))
+
 @everywhere priors = Dict(
-    "action_noise" => LogNormal(0,1),
-    ("x1", "volatility") => Normal(0,1),
-    ("x2", "volatility") => Normal(0,1),
-    ("x3", "volatility") => Normal(0,1),
-    ("x4", "volatility") => Normal(0,1),
-    ("u1", "input_noise") => LogNormal(0,1),
-    ("u2", "input_noise") => LogNormal(0,1),
-    ("u3", "input_noise") => LogNormal(0,1),
-    ("u4", "input_noise") => LogNormal(0,1),
+    "action_noise" => Multilevel(:subj, LogNormal, ["action_noise_group_mean", "action_noise_group_sd"]),
+    "action_noise_group_mean" => Normal(),
+    "action_noise_group_sd" => LogNormal(),
+
+    "x_volatility" => Multilevel(:subj, Normal, ["x_volatility_group_mean", "x_volatility_group_sd"]),
+    "x_volatility_group_mean" => Normal(),
+    "x_volatility_group_sd" => LogNormal(0, 0.01),
+
+    "u_input_noise" => Multilevel(:subj, LogNormal, ["u_input_noise_group_mean", "u_input_noise_group_sd"]),
+    "u_input_noise_group_mean" =>  Normal(),
+    "u_input_noise_group_sd" =>  LogNormal(),
+
+
+    # ("x2", "volatility") => Normal(0,1),
+    # ("x3", "volatility") => Normal(0,1),
+    # ("x4", "volatility") => Normal(0,1),
+    # ("u1", "input_noise") => LogNormal(0,1),
+    # ("u2", "input_noise") => LogNormal(0,1),
+    # ("u3", "input_noise") => LogNormal(0,1),
+    # ("u4", "input_noise") => LogNormal(0,1),
 )
+
+# get_parameters(agent)
 
 @everywhere hgf = init_hgf(
     input_nodes = input_nodes,
@@ -158,30 +220,72 @@ end
     substruct = hgf,
 )
 
-@everywhere trial_data = load_trial_data("./data/IGTdataSteingroever2014/IGTdata.rdata")
+
+get_parameters(hgf)
+# reset!(agent)
+# input = missing
+# n_trials = 4
+
+
+# for i in 1:n_trials
+   
+#     action = ActionModels.single_input!(agent, input)
+
+#     input = 50 #somefunc(action)
+
+# end
+
+# plot of each four nodes (on same)
+# get_history(agent, [("x2", "posterior_mean"), ])
+
+# plot_trajectory(agent, "x1")
+# plot_trajectory!(agent, "x2")
+
+
+
+
+
+# stuff in a "missing" input to start
+# ...
+
+@everywhere trial_data = load_trial_data(
+    "./data/IGTdataSteingroever2014/IGTdata.rdata",
+    true
+)
 
 # start with the 15 subjects of 95 trials
 @everywhere trials_95 = trial_data[trial_data.trial_length .== 95, :]
 
+# for now only subj 1 and 2
+
+@everywhere trials_95 = trials_95[trials_95.subj .<= 2, :]
+
 result = fit_model(
     agent,
     priors,
-    trials_95,
-    independent_group_cols = ["subj", "trial_length"],
+    trial_data,
+    independent_group_cols = ["trial_length"],
+    multilevel_group_cols = ["subj"],
     input_cols = ["outcome"],
-    action_cols = ["choice"],
-    n_cores = 1,
+    action_cols = ["next_choice"], # use the following row's choice as the action
+    n_cores = 4,
+    #n_chains = 4,
     n_chains = 4,
+    #n_samples = 1000,
     n_samples = 1000,
     verbose = false,
-    progress = false,
+    progress = true,
 )
 
 
-save("./data/igt_data_95_chains.jld", "chain", result, compress=true)
+
+
+# save("./data/igt_data_95_chains.jld", "chain", result, compress=true)
+# saved_chain = load("./data/igt_data_95_chains.jld")
+# get_posteriors(result)
 # because we have individual level, the result is a dict of chains
 # try with one example
-result_1 = result[(1, 95)]
+result_1 = result[95]
 plot(result_1)
 
 
