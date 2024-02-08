@@ -1,6 +1,8 @@
 using DataFrames
 using RData
 using Random
+using ForwardDiff: Dual, value
+Base.Integer(x::Dual) = Integer(value(x))
 
 """
     load_trial_data(
@@ -190,12 +192,13 @@ function construct_payoff_sequence(scheme::Int)::PayoffSequence
             D,
         )
     else
-        throw(ArgumentError("scheme must be 1, 2, or 3"))
+        throw(ArgumentError("scheme must be 1, 2, or 3, not $scheme"))
     end
 end
 
 
-function igt_deck_payoff!(choice_history::Vector{Int}, payoffs::PayoffSequence)::Float64
+function igt_deck_payoff!(choice_history::Vector, payoffs::PayoffSequence)::Float64
+    choice_history = Integer.(value(choice_history))
     # get last selection
     deck = last(choice_history)
     # get the number of times this deck has been selected previously
@@ -225,7 +228,7 @@ function igt_deck_payoff!(choice_history::Vector{Int}, payoffs::PayoffSequence):
     elseif deck == 4
         payoff = payoffs.D[deck_index]
     else
-        throw(ArgumentError("deck must be 1, 2, 3, or 4"))
+        throw(ArgumentError("deck must be 1, 2, 3, or 4 not $deck"))
     end
     # does this need to be float?
     return Float64(payoff)

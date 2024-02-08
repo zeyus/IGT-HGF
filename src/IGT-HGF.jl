@@ -3,8 +3,11 @@ using Plots, StatsPlots
 using ActionModels
 using HierarchicalGaussianFiltering
 using Distributed
+using JLD
 #using StatsFuns
 include("Data.jl")
+
+addprocs(4)
 
 @everywhere include("Data.jl")
 
@@ -167,15 +170,15 @@ result = fit_model(
     independent_group_cols = ["subj", "trial_length"],
     input_cols = ["outcome"],
     action_cols = ["choice"],
-    n_cores = 8,
+    n_cores = 1,
     n_chains = 4,
     n_samples = 1000,
     verbose = false,
     progress = false,
 )
 
-rmprocs(workers())
 
+save("./data/igt_data_95_chains.jld", "chain", result, compress=true)
 # because we have individual level, the result is a dict of chains
 # try with one example
 result_1 = result[(1, 95)]
@@ -191,3 +194,6 @@ print(get_parameters(hgf))
 print(get_states(hgf))
 
 plot_trajectory(hgf, "")
+
+
+rmprocs(workers())

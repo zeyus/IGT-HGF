@@ -1,13 +1,14 @@
 
 using Distributions
 using Plots, StatsPlots
-using ActionModels
-using Distributed
+# using ActionModels
+# using Distributed
 using Turing
 using FillArrays
 using StatsFuns
 using JLD
-
+using TypeUtils
+using ForwardDiff: value
 include("src/Data.jl")
 
 
@@ -16,136 +17,59 @@ include("src/Data.jl")
 Turing.setprogress!(true)
 
 
-Φ(x::Real) = cdf(Normal(0, 1), x)
-@model function pvl_delta(N::Int, Tsubj::Vector{Int}, choice::Matrix{Int}, outcome::Matrix{Float64}, ::Type{T} = Float64) where {T}
-    # Hyperparameters
-    A_mu_pr ~ Normal(0, 1)
-    A_sigma ~ Uniform(0, 1.5)
-    alpha_mu_pr ~ Normal(0, 1)
-    alpha_sigma ~ Uniform(0, 1.5)
-    cons_mu_pr ~ Normal(0, 1)
-    cons_sigma ~ Uniform(0, 1.5)
-    lambda_mu_pr ~ Normal(0, 1)
-    lambda_sigma ~ Uniform(0, 1.5)
-
+@model function pvl_delta(N::I, Tsubj::Vector{I}, choice::Matrix{Union{Missing, I}}, payoff_scheme::Int = 1, ::Type{I} = Int, ::Type{T} = Float64) where {I<:Int, T}
+    # Group Level Parameters
+    Aμ ~ Normal(0, 1)
+    Aσ ~ Uniform(0, 1.5)
+    αμ ~ Normal(0, 1)
+    ασ ~ Uniform(0, 1.5)
+    cμ ~ Normal(0, 1)
+    cσ ~ Uniform(0, 1.5)
+    ωμ ~ Normal(0, 1)
+    ωσ ~ Uniform(0, 1.5)
 
     # individual parameters
-    A_pr ~ filldist(Normal(0, 1), N)
-    alpha_pr ~ filldist(Normal(0, 1), N)
-    cons_pr ~ filldist(Normal(0, 1), N)
-    lambda_pr ~ filldist(Normal(0, 1), N)
-
-    # Transform subject-level raw parameters
-    A = Φ.(A_mu_pr .+ A_sigma .* A_pr)
-    alpha = Φ.(alpha_mu_pr .+ alpha_sigma .* alpha_pr) .* 2
-    cons = Φ.(cons_mu_pr .+ cons_sigma .* cons_pr) .* 5
-    lambda = Φ.(lambda_mu_pr .+ lambda_sigma .* lambda_pr) .* 10
-
-    # For log likelihood calculation
-    log_lik = Vector{T}(undef, N)
+    A ~ filldist(LogitNormal(Aμ, Aσ), N)
+    α ~ filldist(LogitNormal(αμ, ασ), N)
+    c ~ filldist(LogNormal(cμ, cσ), N)
+    ω ~ filldist(LogNormal(ωμ, ωσ), N)
 
     for i in 1:N
         # Define values
-        ev = zeros(T, 4)
-        curUtil = 0.0
-        theta = 0.0
-
+        Evₖ = zeros(T, Tsubj[i], 4)
+        
         # Initialize values
-        theta = 3^cons[i] - 1
-
+        θ = 3^c[i] - 1
+        payoffs = construct_payoff_sequence(payoff_scheme)
         for t in 1:Tsubj[i]
+            # Get choice probabilities (random on first trial, otherwise softmax of expected utility)
+            choice_proabilities = t == 1 ? fill(0.25, 4) : softmax(θ .* Evₖ[t-1, :])
             # softmax choice
-            log_lik[i] += log(softmax(theta .* ev)[choice[i, t]])
-
-
-            if outcome[i, t] >= 0
-                curUtil = outcome[i, t]^alpha[i]
-            else
-                curUtil = -1 * lambda[i] * (-1 * outcome[i, t])^alpha[i]
-            end
-
-            # delta
-            ev[choice[i, t]] += A[i] * (curUtil - ev[choice[i, t]])
+            choice[i, t] ~ Categorical(choice_proabilities)
+            # get the result for the selected deck
+            Xₜ = igt_deck_payoff!(value(choice[i, 1:t]), payoffs)
+            # get prospect utility
+            uₖ = (Xₜ >= 0) ? Xₜ^A[i] : -ω[i] * abs(Xₜ)^A[i]
+            
+            k = Integer(value(choice[i, t]))
+            # delta learning rule
+            # update selected deck
+            Evₖ₋₁ = t == 1 ? fill(0.0, 4) : Evₖ[t-1, :]
+            Evₖ[t, k] = Evₖ₋₁[k] + α[i] * (uₖ - Evₖ₋₁[k])
+            # all other decks carry on their previous value
+            Evₖ[t, 1:end .!= k] = Evₖ₋₁[1:end .!= k]
         end
     end
-
-    return log_lik
 end
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-##############################################
-# Simulated Data                             #
-##############################################
-
-# now let's simulate some data
-N = 15  # Number of subjects
-T = 95   # Max number of trials
-Tsubj = fill(T, N)  # Number of trials per subject
-# sample from priors
-A_mu_pr = rand(Normal(0, 1))
-A_sigma = rand(Uniform(0, 1.5))
-alpha_mu_pr = rand(Normal(0, 1))
-alpha_sigma = rand(Uniform(0, 1.5))
-cons_mu_pr = rand(Normal(0, 1))
-cons_sigma = rand(Uniform(0, 1.5))
-lambda_mu_pr = rand(Normal(0, 1))
-lambda_sigma = rand(Uniform(0, 1.5))
-
-# individual parameters
-A_pr = rand(Normal(0, 1), N)
-alpha_pr = rand(Normal(0, 1), N)
-cons_pr = rand(Normal(0, 1), N)
-lambda_pr = rand(Normal(0, 1), N)
-
-# Transform subject-level raw parameters
-A = Φ.(A_mu_pr .+ A_sigma .* A_pr)
-alpha = Φ.(alpha_mu_pr .+ alpha_sigma .* alpha_pr) .* 2
-cons = Φ.(cons_mu_pr .+ cons_sigma .* cons_pr) .* 5
-lambda = Φ.(lambda_mu_pr .+ lambda_sigma .* lambda_pr) .* 10
-
-# now create simulated data from the model priors / assumptions
-simulated_choice = zeros(Int, N, T)
-simulated_outcome = zeros(Float64, N, T)
-
-
-for i in 1:N
-    # Define values
-    ev = zeros(T, 4)
-    curUtil = 0.0
-    theta = 0.0
-    # each subject gets their own decks
-    payoff_scheme = construct_payoff_sequence(1)
-    # Initialize values
-    theta = 3^cons[i] - 1
-    for t in 1:Tsubj[i]
-        # softmax choice
-        simulated_choice[i, t] = rand(Categorical(softmax(theta .* ev[i, :])))
-        # get the result for the selected deck
-        simulated_outcome[i, t] = igt_deck_payoff!(simulated_choice[i, 1:t], payoff_scheme)
-        if simulated_outcome[i, t] >= 0
-            curUtil = simulated_outcome[i, t]^alpha[i]
-        else
-            curUtil = -1 * lambda[i] * (-1 * simulated_outcome[i, t])^alpha[i]
-        end
-        # delta
-        ev[i, simulated_choice[i, t]] += A[i] * (curUtil - ev[simulated_choice[i, t]])
-    end
-end
+N = 15
+Tsubj = fill(95, N)
+simulated_choice = Matrix{Union{Missing, Int}}(undef, N, 95)
 
 # now let's fit the model to the simulated data
-sim_model = pvl_delta(N, Tsubj, simulated_choice, simulated_outcome)
+sim_model = pvl_delta(N, Tsubj, simulated_choice)
 sim_chain = sample(sim_model, HMC(0.05, 10), MCMCThreads(), 1000, 4, progress=true, verbose=true)
 
 # save chain
