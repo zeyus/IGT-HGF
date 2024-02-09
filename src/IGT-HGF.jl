@@ -3,13 +3,15 @@ using Plots, StatsPlots
 using ActionModels
 using HierarchicalGaussianFiltering
 using Distributed
-using JLD
+using HDF5
+using MCMCChains
+using MCMCChainsStorage
+# using JLD
 #using StatsFuns
 include("Data.jl")
 
 addprocs(4)
-
-@everywhere include("Data.jl")
+# include("Data.jl")
 
 @everywhere using HierarchicalGaussianFiltering
 @everywhere using ActionModels
@@ -56,7 +58,7 @@ end
     return action_distribution    
 end
 
-@everywhere input_nodes = [
+input_nodes = [
     "u1",
     "u2",
     "u3",
@@ -64,7 +66,7 @@ end
 ]
 
 # can try modelling volatility, but for now it's fixed
-@everywhere state_nodes = [
+state_nodes = [
     "x1",
     "x2",
     "x3",
@@ -73,7 +75,7 @@ end
     # "xvol", # hgf's guess at how much things are changing over time -> huge loss of 1500 might
 ]
 
-@everywhere edges = [
+edges = [
     Dict(
         "child" => "u1",
         "value_parents" => "x1",
@@ -109,7 +111,7 @@ end
     # ),
 ]
 
-@everywhere shared_parameters = Dict(
+shared_parameters = Dict(
     # value, names of all derived parameters
     "u_input_noise" => (
         1, 
@@ -180,7 +182,7 @@ end
 
 #set_parameters!(hgf, Dict("x_volatility" => 1))
 
-@everywhere priors = Dict(
+priors = Dict(
     "action_noise" => Multilevel(:subj, LogNormal, ["action_noise_group_mean", "action_noise_group_sd"]),
     "action_noise_group_mean" => Normal(),
     "action_noise_group_sd" => LogNormal(),
@@ -205,14 +207,14 @@ end
 
 # get_parameters(agent)
 
-@everywhere hgf = init_hgf(
+hgf = init_hgf(
     input_nodes = input_nodes,
     state_nodes = state_nodes,
     edges = edges,
     shared_parameters = shared_parameters,
 )
 
-@everywhere agent = init_agent(
+agent = init_agent(
     igt_hgf_action,
     parameters = Dict(
         "action_noise" => 1, # 1 = no noise
@@ -248,23 +250,28 @@ get_parameters(hgf)
 # stuff in a "missing" input to start
 # ...
 
-@everywhere trial_data = load_trial_data(
+trial_data = load_trial_data(
     "./data/IGTdataSteingroever2014/IGTdata.rdata",
     true
 )
 
+# get first 3 subjects from each study
+trial_data = trial_data[trial_data.subj .<= 3, :]
+
 # start with the 15 subjects of 95 trials
-@everywhere trials_95 = trial_data[trial_data.trial_length .== 95, :]
-
+# trials_95 = trial_data[trial_data.trial_length .== 95, :]
 # for now only subj 1 and 2
+# trials_95 = trials_95[trials_95.subj .<= 2, :]
 
-@everywhere trials_95 = trials_95[trials_95.subj .<= 2, :]
+@everywhere agent = $agent
+@everywhere priors = $priors
+@everywhere trial_data = $trial_data
 
 result = fit_model(
     agent,
     priors,
     trial_data,
-    independent_group_cols = ["trial_length"],
+    independent_group_cols = ["study"],
     multilevel_group_cols = ["subj"],
     input_cols = ["outcome"],
     action_cols = ["next_choice"], # use the following row's choice as the action
@@ -285,9 +292,47 @@ result = fit_model(
 # get_posteriors(result)
 # because we have individual level, the result is a dict of chains
 # try with one example
-result_1 = result[95]
-plot(result_1)
 
+result_1 = result["Steingroever2011"]
+plot(result_1)
+# save plot to file
+savefig("figures/igt_steingroever2011_3.png")
+p1 = get_posteriors(result_1)
+
+result_2 = result["Fridberg"]
+plot(result_2)
+# save plot to file
+savefig("figures/igt_fridberg_3.png")
+p2 = get_posteriors(result_2)
+
+result_3 = result["Horstmann"]
+plot(result_3)
+# save plot to file
+savefig("figures/igt_horstmann_3.png")
+p3 = get_posteriors(result_3)
+
+# save chains
+h5open("./data/igt_data_95_chains.h5", "w") do file
+    g = create_group(file, "Steingroever2011")
+    write(g, result_1)
+    g = create_group(file, "Fridberg")
+    write(g, result_2)
+    g = create_group(file, "Horstmann")
+    write(g, result_3)
+end
+
+# test reading back
+r1_rec = h5open("./data/igt_data_95_chains.h5", "r") do file
+    read(file["Steingroever2011"], Chains)
+end
+
+r2_rec = h5open("./data/igt_data_95_chains.h5", "r") do file
+    read(file["Fridberg"], Chains)
+end
+
+r3_rec = h5open("./data/igt_data_95_chains.h5", "r") do file
+    read(file["Horstmann"], Chains)
+end
 
 plot_trajectory(agent, ("u1", "input_value"))
 

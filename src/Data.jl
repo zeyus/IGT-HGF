@@ -1,8 +1,8 @@
 using DataFrames
 using RData
 using Random
-using ForwardDiff: Dual, value
-Base.Integer(x::Dual) = Integer(value(x))
+# using ForwardDiff: Dual, value
+# Base.Integer(x::Dual) = Integer(value(x))
 
 
 function load_trial_data(
@@ -209,7 +209,7 @@ function construct_payoff_sequence(scheme::Int)::PayoffSequence
 end
 
 
-function igt_deck_payoff!(choice_history::Vector{T}, payoffs::PayoffSequence, ::Type{T} = Int)::Float64 where {T<:Integer}
+function igt_deck_payoff!(choice_history::Vector{Union{Missing, T}}, payoffs::PayoffSequence, ::Type{T} = Int16)::Float64 where {T<:Integer}
     # choice_history = Integer.(value(choice_history))
     # get last selection
     deck = last(choice_history)

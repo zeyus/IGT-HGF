@@ -1,14 +1,17 @@
-
+using ForwardDiff
+using Preferences
+set_preferences!(ForwardDiff, "nansafe_mode" => true)
 using Distributions
 using Plots, StatsPlots
 # using ActionModels
 # using Distributed
 using Turing
+using Optim
 using FillArrays
 using StatsFuns
-using JLD
-using TypeUtils
-using ForwardDiff: value
+# using StatsBase
+# using TypeUtils
+# using ForwardDiff: value
 include("src/Data.jl")
 
 
@@ -17,153 +20,93 @@ include("src/Data.jl")
 Turing.setprogress!(true)
 
 
-@model function pvl_delta(N::Int, Tsubj::Vector{I}, choice::Matrix{Union{Missing, I}}, payoff_scheme::Int = 1, ::Type{I} = Int16, ::Type{T} = Float64) where {I<:Integer, T}
+@model function pvl_delta(actions::Matrix{Union{Missing, Int}}, N::Int, Tsubj::Vector{Int}, payoff_scheme::Int = 1, ::Type{T} = Float64) where {T}
     # Group Level Parameters
     Aμ ~ Normal(0, 1)
     Aσ ~ Uniform(0, 1.5)
-    αμ ~ Normal(0, 1)
-    ασ ~ Uniform(0, 1.5)
+    aμ ~ Normal(0, 1)
+    aσ ~ Uniform(0, 1.5)
     cμ ~ Normal(0, 1)
     cσ ~ Uniform(0, 1.5)
-    ωμ ~ Normal(0, 1)
-    ωσ ~ Uniform(0, 1.5)
-
+    wμ ~ Normal(0, 1)
+    wσ ~ Uniform(0, 1.5)
+    
     # individual parameters
     A ~ filldist(LogitNormal(Aμ, Aσ), N)
-    α ~ filldist(LogitNormal(αμ, ασ), N)
-    c ~ filldist(LogNormal(cμ, cσ), N)
-    ω ~ filldist(LogNormal(ωμ, ωσ), N)
+    a ~ filldist(LogitNormal(aμ, aσ), N)
+    # had to truncat to match paper
+    # and avoid Inf values for θ
+    c ~ filldist(truncated(LogNormal(cμ, cσ); upper=5), N)
+    w ~ filldist(truncated(LogNormal(cμ, cσ); upper=5), N)
+    
+    if actions === missing
+        actions = Matrix{Union{Missing, Int}}(undef, N, maximum(Tsubj))
+    end
 
     for i in 1:N
         # Define values
         Evₖ = zeros(T, Tsubj[i], 4)
         
-        # Initialize values
+        # Set theta
         θ = 3^c[i] - 1
         payoffs = construct_payoff_sequence(payoff_scheme)
         for t in 1:Tsubj[i]
             # Get choice probabilities (random on first trial, otherwise softmax of expected utility)
-            choice_proabilities = t == 1 ? fill(0.25, 4) : softmax(θ .* Evₖ[t-1, :])
-            # softmax choice
-            k₀ ~ Categorical(choice_proabilities)
+            try
+                choice_proabilities = t == 1 ? fill(0.25, 4) : softmax(θ .* Evₖ[t-1, :])
+                # softmax choice (draw)
+                actions[i, t] = rand(Categorical(choice_proabilities))
+            catch e
+                println("t: ", t)
+                println("i: ", i)
+                println("Evₖ[t-1, :]: ", Evₖ[t-1, :])
+                println("θ: ", θ)
+                println("c[i]", c[i])
+                println("w[i]", w[i])
+                println("A[i]", A[i])
+                println("a[i]", a[i])
+                throw(e)
+            end
             # get the result for the selected deck
-            k = Int16(value(k₀))
-            choice[i, t] = k
-            Xₜ = igt_deck_payoff!(choice[i, 1:t], payoffs)
-            # get prospect utility
-            uₖ = (Xₜ >= 0) ? Xₜ^A[i] : -ω[i] * abs(Xₜ)^A[i]
+            k = actions[i, t]
             
+            Xₜ = igt_deck_payoff!(actions[i, 1:t], payoffs, Int)
+            # get prospect utility
+            uₖ = (Xₜ >= 0) ? Xₜ^A[i] : -w[i] * abs(Xₜ)^A[i]
             
             # delta learning rule
-            # update selected deck
-            Evₖ₋₁ = t == 1 ? fill(0.0, 4) : Evₖ[t-1, :]
-            Evₖ[t, k] = Evₖ₋₁[k] + α[i] * (uₖ - Evₖ₋₁[k])
+            # get previous selection
+            Evₖ₍ₜ₋₁₎ = t == 1 ? fill(0.0, 4) : Evₖ[t-1, :]
+            # update expected value of selected deck
+            Evₖ[t, k] = Evₖ₍ₜ₋₁₎[k] + a[i] * (uₖ - Evₖ₍ₜ₋₁₎[k])
             # all other decks carry on their previous value
-            Evₖ[t, 1:end .!= k] = Evₖ₋₁[1:end .!= k]
+            Evₖ[t, 1:end .!= k] = Evₖ₍ₜ₋₁₎[1:end .!= k]
         end
     end
+    # return actions
 end
 
 
 
-N = 15
-Tsubj = Vector{Int16}(fill(95, N))
-simulated_choice = Matrix{Union{Missing, Int16}}(fill(missing, N, 95))
+N = 3
+ntrials = 50
+Tsubj = Vector{Int}(fill(ntrials, N))
+simulated_choice = Matrix{Union{Missing, Int}}(fill(missing, N, ntrials))
 
 # now let's fit the model to the simulated data
-sim_model = pvl_delta(N, Tsubj, simulated_choice)
-sim_chain = sample(sim_model, HMC(0.05, 10), MCMCThreads(), 1000, 4, progress=true, verbose=true)
+sim_model = pvl_delta(simulated_choice, N, Tsubj)
+sim_chain = sample(
+    sim_model,
+    NUTS(),
+    MCMCThreads(),
+    1000,
+    4,
+    progress=true,
+    verbose=false,
+)
 
-# save chain
-save("./data/pvl_sim_chain.jld", "chain", sim_chain, compress=true)
-
-# get mode for the 4 parameters
-g_A_mu_pr_mode = mode(sim_chain[:"A_mu_pr"])
-g_A_sigma_mode = mode(sim_chain[:"A_sigma"])
-
-g_alpha_mu_pr_mode = mode(sim_chain[:"alpha_mu_pr"])
-g_alpha_sigma_mode = mode(sim_chain[:"alpha_sigma"])
-
-g_cons_mu_pr_mode = mode(sim_chain[:"cons_mu_pr"])
-g_cons_sigma_mode = mode(sim_chain[:"cons_sigma"])
-
-g_lambda_mu_pr_mode = mode(sim_chain[:"lambda_mu_pr"])
-g_lambda_sigma_mode = mode(sim_chain[:"lambda_sigma"])
-
-
-# get the modes for each subject
-i_A_pr = fill(NaN, N)
-i_alpha_pr = fill(NaN, N)
-i_cons_pr = fill(NaN, N)
-i_lambda_pr = fill(NaN, N)
-for i in 1:N
-    i_A_pr[i] = mode(sim_chain[Symbol("A_pr[$i]")])
-    i_alpha_pr[i] = mode(sim_chain[Symbol("alpha_pr[$i]")])
-    i_cons_pr[i] = mode(sim_chain[Symbol("cons_pr[$i]")])
-    i_lambda_pr[i] = mode(sim_chain[Symbol("lambda_pr[$i]")])
-end
-
-g_A_mode = mean(Φ.(g_A_mu_pr_mode .+ g_A_sigma_mode * i_A_pr))
-g_alpha_mode = mean(Φ.(g_alpha_mu_pr_mode .+ g_alpha_sigma_mode * i_alpha_pr) .* 2)
-g_cons_mode = mean(Φ.(g_cons_mu_pr_mode .+ g_cons_sigma_mode * i_cons_pr) .* 5)
-g_lambda_mode = mean(Φ.(g_lambda_mu_pr_mode .+ g_lambda_sigma_mode * i_lambda_pr) .* 10)
-
-
-i_A = Matrix{Real}(undef, N, 3)
-i_alpha = Matrix{Real}(undef, N, 3)
-i_cons = Matrix{Real}(undef, N, 3)
-i_lambda = Matrix{Real}(undef, N, 3)
-# combine A and i_A_pr
-for i in 1:N
-    i_A[i, 2] = i
-    i_A[i, 3] = i_A_pr[i]
-    i_A[i, 1] = A[i]
-
-    i_alpha[i, 2] = i
-    i_alpha[i, 3] = i_alpha_pr[i]
-    i_alpha[i, 1] = alpha[i]
-
-    i_cons[i, 2] = i
-    i_cons[i, 3] = i_cons_pr[i]
-    i_cons[i, 1] = cons[i]
-
-    i_lambda[i, 2] = i
-    i_lambda[i, 3] = i_lambda_pr[i]
-    i_lambda[i, 1] = lambda[i]
-end
-# sort by A
-i_A = sortslices(i_A, dims=1, lt=(x,y) -> x[1] < y[1])
-i_alpha = sortslices(i_alpha, dims=1, lt=(x,y) -> x[1] < y[1])
-i_cons = sortslices(i_cons, dims=1, lt=(x,y) -> x[1] < y[1])
-i_lambda = sortslices(i_lambda, dims=1, lt=(x,y) -> x[1] < y[1])
-
-
-# plot A with line for group level mode and recovered group level mode
-p1 = plot(1:N, i_A[:, 1], label="Simulated A", xlabel="Subject", ylabel="A", title="A group and individual level")
-plot!(1:N, i_A[:, 3], label="Recovered A", line=:dash)
-plot!([1, N], [g_A_mode, g_A_mode], label="Recovered group level mode", line=:dash)
-plot!([1, N], [mean(A), mean(A)], label="Group level mode", line=:dot)
-
-# plot alpha with line for group level mode and recovered group level mode
-p2 = plot(1:N, i_alpha[:, 1], label="Simulated alpha", xlabel="Subject", ylabel="alpha", title="alpha group and individual level")
-plot!(1:N, i_alpha[:, 3], label="Recovered alpha", line=:dash)
-plot!([1, N], [g_alpha_mode, g_alpha_mode], label="Recovered group level mode", line=:dash)
-plot!([1, N], [mean(alpha), mean(alpha)], label="Group level mode", line=:dot)
-
-# plot cons with line for group level mode and recovered group level mode
-p3 = plot(1:N, i_cons[:, 1], label="Simulated cons", xlabel="Subject", ylabel="cons", title="cons group and individual level")
-plot!(1:N, i_cons[:, 3], label="Recovered cons", line=:dash)
-plot!([1, N], [g_cons_mode, g_cons_mode], label="Recovered group level mode", line=:dash)
-plot!([1, N], [mean(cons), mean(cons)], label="Group level mode", line=:dot)
-
-# plot lambda with line for group level mode and recovered group level mode
-p4 = plot(1:N, i_lambda[:, 1], label="Simulated lambda", xlabel="Subject", ylabel="lambda", title="lambda group and individual level")
-plot!(1:N, i_lambda[:, 3], label="Recovered lambda", line=:dash)
-plot!([1, N], [g_lambda_mode, g_lambda_mode], label="Recovered group level mode", line=:dash)
-plot!([1, N], [mean(lambda), mean(lambda)], label="Group level mode", line=:dot)
-
-plot(p1, p2, p3, p4, layout=(2, 2), legend=:outertop, size=(1600, 1600))
-
+# plot the chain
+plot(sim_chain)
 # save plot
 savefig("./figures/pvl_simulated_data.png")
 
@@ -195,10 +138,8 @@ outcome = reshape(trial_data_95.outcome, (N, T))
 
 model = pvl_delta(N, Tsubj, choice, outcome)
 
-chain = sample(model, HMC(0.05, 10), MCMCThreads(), 1000, 4, progress=true, verbose=true)
+chain = sample(model, HMC(0.05, 10), NUTS(), 1000, 4, progress=true, verbose=false)
 
-# save chain
-save("./data/pvl_data_95_chain.jld", "chain", chain, compress=true)
 
 # save chain summary / info to file
 io = open("./data/pvl_data_95_chain_summary.txt", "w")
