@@ -1,3 +1,5 @@
+using LinearAlgebra
+LinearAlgebra.BLAS.set_num_threads(1)  # possible julia/windows bug fix?
 using Distributions
 using Plots, StatsPlots
 using ActionModels
@@ -6,13 +8,15 @@ using Distributed
 using HDF5
 using MCMCChains
 using MCMCChainsStorage
+
 # using JLD
 #using StatsFuns
 include("Data.jl")
 
 addprocs(4)
 # include("Data.jl")
-
+@everywhere using LinearAlgebra
+@everywhere LinearAlgebra.BLAS.set_num_threads(1)  # possible julia/windows bug fix?
 @everywhere using HierarchicalGaussianFiltering
 @everywhere using ActionModels
 @everywhere using Distributions
@@ -256,7 +260,7 @@ trial_data = load_trial_data(
 )
 
 # get first 3 subjects from each study
-trial_data = trial_data[trial_data.subj .<= 3, :]
+# trial_data = trial_data[trial_data.subj .<= 3, :]
 
 # start with the 15 subjects of 95 trials
 # trials_95 = trial_data[trial_data.trial_length .== 95, :]
@@ -277,7 +281,7 @@ result = fit_model(
     action_cols = ["next_choice"], # use the following row's choice as the action
     n_cores = 4,
     #n_chains = 4,
-    n_chains = 4,
+    n_chains = 3,
     #n_samples = 1000,
     n_samples = 1000,
     verbose = false,

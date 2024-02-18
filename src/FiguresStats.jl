@@ -55,4 +55,14 @@ plot_violin(hgf_sim_chains; var_names=[
 gcf()
 
 
+plot_ess(hgf_sim_chains; var_names=[
+    "x_volatility_group_mean",
+    "x_volatility_group_sd",
+    ], kind="evolution")
+gcf()
+
+
+plot_density(hgf_sim_chains)
+gcf()
+
 distplot!(hgf_sim_chains; fill=true, alpha=0.5, var_names=["action_noise_group_mean"], groupname=:prior, label="prior")
