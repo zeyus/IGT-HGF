@@ -41,6 +41,10 @@ function load_trial_data(
         outcome = Union{Missing, Float64}[],
         scheme = Union{Missing, Int}[],
         next_choice = Union{Missing, Int}[],
+        cd_ratio = Union{Missing, Float64}[],
+        ab_ratio = Union{Missing, Float64}[],
+        bd_ratio = Union{Missing, Float64}[],
+
     )
 
     # populate the trial data dictionary
@@ -51,6 +55,9 @@ function load_trial_data(
         losses = Float64.(objs["lo_$l"])
         choice_t = transpose(trunc.(Int, objs["choice_$l"]))
         for i in eachindex(subj)
+            CDRatio = (length(choice_t[:, i] .== 3) + length(choice_t[:, i] .== 4)) / (length(choice_t[:, i]))
+            ABRatio = (length(choice_t[:, i] .== 1) + length(choice_t[:, i] .== 2)) / (length(choice_t[:, i]))
+            BDRatio = (length(choice_t[:, i] .== 2) + length(choice_t[:, i] .== 4)) / (length(choice_t[:, i]))
             n_trials = length(losses[i, :])
             if add_missing_input
                 push!(df, (
@@ -64,6 +71,9 @@ function load_trial_data(
                     missing,
                     scheme_map[study[i]],
                     choice_t[1, i],
+                    CDRatio,
+                    ABRatio,
+                    BDRatio,
                 ))
             end
             for j in 1:n_trials
@@ -79,6 +89,9 @@ function load_trial_data(
                     wins[i, j] + losses[i, j],
                     scheme_map[study[i]],
                     next_choice,
+                    CDRatio,
+                    ABRatio,
+                    BDRatio,
                 ))
             end
         end
