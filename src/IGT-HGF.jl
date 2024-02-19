@@ -259,8 +259,33 @@ trial_data = load_trial_data(
     true
 )
 
-# get first 3 subjects from each study
-# trial_data = trial_data[trial_data.subj .<= 3, :]
+# match Steingroever et al (2013)
+
+# only get trials where
+# - cd_ratio >= 0.65
+# - ab_ratio >= 0.65
+# - bd_ratio >= 0.65
+# - ac_ratio >= 0.65
+trial_data = trial_data[
+    (trial_data.cd_ratio .>= 0.65) .| 
+    (trial_data.ab_ratio .>= 0.65) .| 
+    (trial_data.bd_ratio .>= 0.65) .|
+    (trial_data.ac_ratio .>= 0.65), :
+]
+
+# add a "choice pattern" column
+# 1 = CD >= 0.65, 2 = AB >= 0.65, 3 = BD >= 0.65, 4 = AC >= 0.65
+trial_data.choice_pattern_ab = (trial_data.ab_ratio .>= 0.65) .+ 0
+trial_data.choice_pattern_cd = (trial_data.cd_ratio .>= 0.65) .+ 0
+trial_data.choice_pattern_bd = (trial_data.bd_ratio .>= 0.65) .+ 0
+trial_data.choice_pattern_ac = (trial_data.ac_ratio .>= 0.65) .+ 0
+
+# now we have a name for the choice pattern
+# cd = good, ab = bad, bd = infrequent, ac = frequent
+# cd + bd = good_infrequent, ab + bd = bad_infrequent, cd + ac = good_frequent, ab + ac = bad_frequent
+
+# trial_data.choice_pattern = 
+
 
 # start with the 15 subjects of 95 trials
 # trials_95 = trial_data[trial_data.trial_length .== 95, :]
