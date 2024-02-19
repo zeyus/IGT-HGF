@@ -13,7 +13,7 @@ using MCMCChainsStorage
 #using StatsFuns
 include("Data.jl")
 
-addprocs(4)
+addprocs(6)
 # include("Data.jl")
 @everywhere using LinearAlgebra
 @everywhere LinearAlgebra.BLAS.set_num_threads(1)  # possible julia/windows bug fix?
@@ -266,31 +266,31 @@ trial_data = load_trial_data(
 # - ab_ratio >= 0.65
 # - bd_ratio >= 0.65
 # - ac_ratio >= 0.65
-trial_data = trial_data[
-    (trial_data.cd_ratio .>= 0.65) .| 
-    (trial_data.ab_ratio .>= 0.65) .| 
-    (trial_data.bd_ratio .>= 0.65) .|
-    (trial_data.ac_ratio .>= 0.65), :
-]
+# trial_data = trial_data[
+#     (trial_data.cd_ratio .>= 0.65) .| 
+#     (trial_data.ab_ratio .>= 0.65) .| 
+#     (trial_data.bd_ratio .>= 0.65) .|
+#     (trial_data.ac_ratio .>= 0.65), :
+# ]
 
 # add a "choice pattern" column
-# 1 = CD >= 0.65, 2 = AB >= 0.65, 3 = BD >= 0.65, 4 = AC >= 0.65
-trial_data.choice_pattern_ab = (trial_data.ab_ratio .>= 0.65) .+ 0
-trial_data.choice_pattern_cd = (trial_data.cd_ratio .>= 0.65) .+ 0
-trial_data.choice_pattern_bd = (trial_data.bd_ratio .>= 0.65) .+ 0
-trial_data.choice_pattern_ac = (trial_data.ac_ratio .>= 0.65) .+ 0
+# 1 = CD >= 0.65, 2 = AB >= 0.65, 4 = BD >= 0.65, 8 = AC >= 0.65
+trial_data.choice_pattern_ab = ifelse.(trial_data.ab_ratio .>= 0.65, 1, 0)
+trial_data.choice_pattern_cd = ifelse.(trial_data.cd_ratio .>= 0.65, 2, 0)
+trial_data.choice_pattern_bd = ifelse.(trial_data.bd_ratio .>= 0.65, 4, 0)
+trial_data.choice_pattern_ac = ifelse.(trial_data.ac_ratio .>= 0.65, 8, 0)
 
-# now we have a name for the choice pattern
-# cd = good, ab = bad, bd = infrequent, ac = frequent
-# cd + bd = good_infrequent, ab + bd = bad_infrequent, cd + ac = good_frequent, ab + ac = bad_frequent
+trial_data.choice_pattern = trial_data.choice_pattern_ab .| trial_data.choice_pattern_cd .| trial_data.choice_pattern_bd .| trial_data.choice_pattern_ac
 
-# trial_data.choice_pattern = 
+#patterns
+pats = unique(trial_data.choice_pattern)
 
-
-# start with the 15 subjects of 95 trials
-# trials_95 = trial_data[trial_data.trial_length .== 95, :]
-# for now only subj 1 and 2
-# trials_95 = trials_95[trials_95.subj .<= 2, :]
+# get number of unique subjects for each pattern
+n_subj = [length(unique(trial_data[trial_data.choice_pattern .== pat, :subj])) for pat in pats]
+# print out
+for (pat, n) in zip(pats, n_subj)
+    println("Pattern: $pat, n = $n")
+end
 
 @everywhere agent = $agent
 @everywhere priors = $priors
@@ -300,11 +300,11 @@ result = fit_model(
     agent,
     priors,
     trial_data,
-    independent_group_cols = ["study"],
+    independent_group_cols = ["choice_pattern"],
     multilevel_group_cols = ["subj"],
     input_cols = ["outcome"],
     action_cols = ["next_choice"], # use the following row's choice as the action
-    n_cores = 4,
+    n_cores = 6,
     #n_chains = 4,
     n_chains = 3,
     #n_samples = 1000,
