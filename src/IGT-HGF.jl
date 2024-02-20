@@ -313,7 +313,15 @@ result = fit_model(
     progress = true,
 )
 
-
+# save chains
+h5open("./data/igt_data_chains_data.h5", "w") do file
+    # save a group for each result (choice_pattern)
+    for (pat, chain) in result
+        out_group = "choice_pattern_$pat"
+        g = create_group(file, out_group)
+        write(g, chain)
+    end
+end
 
 
 # save("./data/igt_data_95_chains.jld", "chain", result, compress=true)
@@ -322,56 +330,56 @@ result = fit_model(
 # because we have individual level, the result is a dict of chains
 # try with one example
 
-result_1 = result["Steingroever2011"]
-plot(result_1)
-# save plot to file
-savefig("figures/igt_steingroever2011_3.png")
-p1 = get_posteriors(result_1)
+# result_1 = result["Steingroever2011"]
+# plot(result_1)
+# # save plot to file
+# savefig("figures/igt_steingroever2011_3.png")
+# p1 = get_posteriors(result_1)
 
-result_2 = result["Fridberg"]
-plot(result_2)
-# save plot to file
-savefig("figures/igt_fridberg_3.png")
-p2 = get_posteriors(result_2)
+# result_2 = result["Fridberg"]
+# plot(result_2)
+# # save plot to file
+# savefig("figures/igt_fridberg_3.png")
+# p2 = get_posteriors(result_2)
 
-result_3 = result["Horstmann"]
-plot(result_3)
-# save plot to file
-savefig("figures/igt_horstmann_3.png")
-p3 = get_posteriors(result_3)
+# result_3 = result["Horstmann"]
+# plot(result_3)
+# # save plot to file
+# savefig("figures/igt_horstmann_3.png")
+# p3 = get_posteriors(result_3)
 
-# save chains
-h5open("./data/igt_data_95_chains.h5", "w") do file
-    g = create_group(file, "Steingroever2011")
-    write(g, result_1)
-    g = create_group(file, "Fridberg")
-    write(g, result_2)
-    g = create_group(file, "Horstmann")
-    write(g, result_3)
-end
+# # save chains
+# h5open("./data/igt_data_95_chains.h5", "w") do file
+#     g = create_group(file, "Steingroever2011")
+#     write(g, result_1)
+#     g = create_group(file, "Fridberg")
+#     write(g, result_2)
+#     g = create_group(file, "Horstmann")
+#     write(g, result_3)
+# end
 
-# test reading back
-r1_rec = h5open("./data/igt_data_95_chains.h5", "r") do file
-    read(file["Steingroever2011"], Chains)
-end
+# # test reading back
+# r1_rec = h5open("./data/igt_data_95_chains.h5", "r") do file
+#     read(file["Steingroever2011"], Chains)
+# end
 
-r2_rec = h5open("./data/igt_data_95_chains.h5", "r") do file
-    read(file["Fridberg"], Chains)
-end
+# r2_rec = h5open("./data/igt_data_95_chains.h5", "r") do file
+#     read(file["Fridberg"], Chains)
+# end
 
-r3_rec = h5open("./data/igt_data_95_chains.h5", "r") do file
-    read(file["Horstmann"], Chains)
-end
+# r3_rec = h5open("./data/igt_data_95_chains.h5", "r") do file
+#     read(file["Horstmann"], Chains)
+# end
 
-plot_trajectory(agent, ("u1", "input_value"))
+# plot_trajectory(agent, ("u1", "input_value"))
 
-print(get_parameters(agent))
-print(get_states(agent))
+# print(get_parameters(agent))
+# print(get_states(agent))
 
-print(get_parameters(hgf))
-print(get_states(hgf))
+# print(get_parameters(hgf))
+# print(get_states(hgf))
 
-plot_trajectory(hgf, "")
+# plot_trajectory(hgf, "")
 
 
 rmprocs(workers())
