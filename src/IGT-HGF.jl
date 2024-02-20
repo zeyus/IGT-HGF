@@ -280,17 +280,17 @@ trial_data.choice_pattern_cd = (trial_data.cd_ratio .>= 0.65) .+ 0
 trial_data.choice_pattern_bd = (trial_data.bd_ratio .>= 0.65) .+ 0
 trial_data.choice_pattern_ac = (trial_data.ac_ratio .>= 0.65) .+ 0
 
-# now we have a name for the choice pattern
-# cd = good, ab = bad, bd = infrequent, ac = frequent
-# cd + bd = good_infrequent, ab + bd = bad_infrequent, cd + ac = good_frequent, ab + ac = bad_frequent
+trial_data.choice_pattern = trial_data.choice_pattern_ab .| trial_data.choice_pattern_cd .| trial_data.choice_pattern_bd .| trial_data.choice_pattern_ac
 
-# trial_data.choice_pattern = 
+#patterns
+pats = unique(trial_data.choice_pattern)
 
-
-# start with the 15 subjects of 95 trials
-# trials_95 = trial_data[trial_data.trial_length .== 95, :]
-# for now only subj 1 and 2
-# trials_95 = trials_95[trials_95.subj .<= 2, :]
+# get number of unique subjects for each pattern
+n_subj = [length(unique(trial_data[trial_data.choice_pattern .== pat, :subj])) for pat in pats]
+# print out
+for (pat, n) in zip(pats, n_subj)
+    println("Pattern: $pat, n = $n")
+end 
 
 @everywhere agent = $agent
 @everywhere priors = $priors
@@ -300,7 +300,7 @@ result = fit_model(
     agent,
     priors,
     trial_data,
-    independent_group_cols = ["study"],
+    independent_group_cols = ["choice_pattern"],
     multilevel_group_cols = ["subj"],
     input_cols = ["outcome"],
     action_cols = ["next_choice"], # use the following row's choice as the action
@@ -313,7 +313,15 @@ result = fit_model(
     progress = true,
 )
 
-
+# save chains
+h5open("./data/igt_data_chains_data.h5", "w") do file
+    # save a group for each result (choice_pattern)
+    for (pat, chain) in result
+        out_group = "choice_pattern_$pat"
+        g = create_group(file, out_group)
+        write(g, chain)
+    end
+end
 
 
 # save("./data/igt_data_95_chains.jld", "chain", result, compress=true)
@@ -322,56 +330,56 @@ result = fit_model(
 # because we have individual level, the result is a dict of chains
 # try with one example
 
-result_1 = result["Steingroever2011"]
-plot(result_1)
-# save plot to file
-savefig("figures/igt_steingroever2011_3.png")
-p1 = get_posteriors(result_1)
+# result_1 = result["Steingroever2011"]
+# plot(result_1)
+# # save plot to file
+# savefig("figures/igt_steingroever2011_3.png")
+# p1 = get_posteriors(result_1)
 
-result_2 = result["Fridberg"]
-plot(result_2)
-# save plot to file
-savefig("figures/igt_fridberg_3.png")
-p2 = get_posteriors(result_2)
+# result_2 = result["Fridberg"]
+# plot(result_2)
+# # save plot to file
+# savefig("figures/igt_fridberg_3.png")
+# p2 = get_posteriors(result_2)
 
-result_3 = result["Horstmann"]
-plot(result_3)
-# save plot to file
-savefig("figures/igt_horstmann_3.png")
-p3 = get_posteriors(result_3)
+# result_3 = result["Horstmann"]
+# plot(result_3)
+# # save plot to file
+# savefig("figures/igt_horstmann_3.png")
+# p3 = get_posteriors(result_3)
 
-# save chains
-h5open("./data/igt_data_95_chains.h5", "w") do file
-    g = create_group(file, "Steingroever2011")
-    write(g, result_1)
-    g = create_group(file, "Fridberg")
-    write(g, result_2)
-    g = create_group(file, "Horstmann")
-    write(g, result_3)
-end
+# # save chains
+# h5open("./data/igt_data_95_chains.h5", "w") do file
+#     g = create_group(file, "Steingroever2011")
+#     write(g, result_1)
+#     g = create_group(file, "Fridberg")
+#     write(g, result_2)
+#     g = create_group(file, "Horstmann")
+#     write(g, result_3)
+# end
 
-# test reading back
-r1_rec = h5open("./data/igt_data_95_chains.h5", "r") do file
-    read(file["Steingroever2011"], Chains)
-end
+# # test reading back
+# r1_rec = h5open("./data/igt_data_95_chains.h5", "r") do file
+#     read(file["Steingroever2011"], Chains)
+# end
 
-r2_rec = h5open("./data/igt_data_95_chains.h5", "r") do file
-    read(file["Fridberg"], Chains)
-end
+# r2_rec = h5open("./data/igt_data_95_chains.h5", "r") do file
+#     read(file["Fridberg"], Chains)
+# end
 
-r3_rec = h5open("./data/igt_data_95_chains.h5", "r") do file
-    read(file["Horstmann"], Chains)
-end
+# r3_rec = h5open("./data/igt_data_95_chains.h5", "r") do file
+#     read(file["Horstmann"], Chains)
+# end
 
-plot_trajectory(agent, ("u1", "input_value"))
+# plot_trajectory(agent, ("u1", "input_value"))
 
-print(get_parameters(agent))
-print(get_states(agent))
+# print(get_parameters(agent))
+# print(get_states(agent))
 
-print(get_parameters(hgf))
-print(get_states(hgf))
+# print(get_parameters(hgf))
+# print(get_states(hgf))
 
-plot_trajectory(hgf, "")
+# plot_trajectory(hgf, "")
 
 
 rmprocs(workers())

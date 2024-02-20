@@ -9,6 +9,9 @@ using Turing
 using Optim
 using FillArrays
 using StatsFuns
+using HDF5
+using MCMCChains
+using MCMCChainsStorage
 # using StatsBase
 # using TypeUtils
 # using ForwardDiff: value
@@ -20,7 +23,7 @@ include("src/Data.jl")
 Turing.setprogress!(true)
 
 
-@model function pvl_delta(actions::Matrix{Union{Missing, Int}}, N::Int, Tsubj::Vector{Int}, payoff_scheme::Int = 1, ::Type{T} = Float64) where {T}
+@model function pvl_delta(actions::Matrix{Union{Missing, Int}}, N::Int, Tsubj::Vector{Int}, payoff_scheme::Vector{Union{Missing, Int}}, ::Type{T} = Float64) where {T}
     # Group Level Parameters
     Aμ ~ Normal(0, 1)
     Aσ ~ Uniform(0, 1.5)
@@ -49,7 +52,7 @@ Turing.setprogress!(true)
         
         # Set theta
         θ = 3^c[i] - 1
-        payoffs = construct_payoff_sequence(payoff_scheme)
+        payoffs = construct_payoff_sequence(payoff_scheme[i])
         for t in 1:Tsubj[i]
             # Get choice probabilities (random on first trial, otherwise softmax of expected utility)
             try
@@ -88,36 +91,36 @@ end
 
 
 
-N = 3
-ntrials = 50
-Tsubj = Vector{Int}(fill(ntrials, N))
-simulated_choice = Matrix{Union{Missing, Int}}(fill(missing, N, ntrials))
+# N = 3
+# ntrials = 50
+# Tsubj = Vector{Int}(fill(ntrials, N))
+# simulated_choice = Matrix{Union{Missing, Int}}(fill(missing, N, ntrials))
 
-# now let's fit the model to the simulated data
-sim_model = pvl_delta(simulated_choice, N, Tsubj)
-sim_chain = sample(
-    sim_model,
-    NUTS(),
-    MCMCThreads(),
-    1000,
-    4,
-    progress=true,
-    verbose=false,
-)
+# # now let's fit the model to the simulated data
+# sim_model = pvl_delta(simulated_choice, N, Tsubj)
+# sim_chain = sample(
+#     sim_model,
+#     NUTS(),
+#     MCMCThreads(),
+#     1000,
+#     4,
+#     progress=true,
+#     verbose=false,
+# )
 
-# plot the chain
-plot(sim_chain)
-# save plot
-savefig("./figures/pvl_simulated_data.png")
+# # plot the chain
+# plot(sim_chain)
+# # save plot
+# savefig("./figures/pvl_simulated_data.png")
 
-# save chain summary / info to file
+# # save chain summary / info to file
 
 
-io = open("./data/pvl_sim_chain_summary.txt", "w")
-show(io, MIME("text/plain"), sim_chain)
-show(io, MIME("text/plain"), summarize(sim_chain))
-show(io, MIME("text/plain"), hpd(sim_chain))
-close(io)
+# io = open("./data/pvl_sim_chain_summary.txt", "w")
+# show(io, MIME("text/plain"), sim_chain)
+# show(io, MIME("text/plain"), summarize(sim_chain))
+# show(io, MIME("text/plain"), hpd(sim_chain))
+# close(io)
 
 ##############################################
 # Real Data                                  #
@@ -126,30 +129,81 @@ close(io)
 
 # let's try with real data
 trial_data = load_trial_data("./data/IGTdataSteingroever2014/IGTdata.rdata")
+# add a "choice pattern" column
+# 1 = CD >= 0.65, 2 = AB >= 0.65, 4 = BD >= 0.65, 8 = AC >= 0.65
+trial_data.choice_pattern_ab = ifelse.(trial_data.ab_ratio .>= 0.65, 1, 0)
+trial_data.choice_pattern_cd = ifelse.(trial_data.cd_ratio .>= 0.65, 2, 0)
+trial_data.choice_pattern_bd = ifelse.(trial_data.bd_ratio .>= 0.65, 4, 0)
+trial_data.choice_pattern_ac = ifelse.(trial_data.ac_ratio .>= 0.65, 8, 0)
 
-# all 95 subjects
-trial_data_95 = trial_data[trial_data.trial_length .== 95, :]
-subjs = unique(trial_data_95.subj)
-N = length(subjs)
-T = 95
-Tsubj = fill(T, N)
-choice = reshape(trial_data_95.choice, (N, T))
-outcome = reshape(trial_data_95.outcome, (N, T))
+trial_data.choice_pattern = trial_data.choice_pattern_ab .| trial_data.choice_pattern_cd .| trial_data.choice_pattern_bd .| trial_data.choice_pattern_ac
+# just one subject to test
+# trial_data = trial_data[trial_data.subj .== 1, :]
+# trial_data = trial_data[trial_data.study .== "Steingroever2011", :]
 
-model = pvl_delta(N, Tsubj, choice, outcome)
+#patterns
+pats = unique(trial_data.choice_pattern)
 
-chain = sample(model, HMC(0.05, 10), NUTS(), 1000, 4, progress=true, verbose=false)
+# get number of unique subjects for each pattern
+n_subj = [length(unique(trial_data[trial_data.choice_pattern .== pat, :subj])) for pat in pats]
+
+chain_out_file = "./data/igt_pvldelta_data_chains.h5"
+
+# delete chain file if it exists
+if isfile(chain_out_file)
+    print("Deleting file: $chain_out_file")
+    rm(chain_out_file)
+end
+# print out
+for (pat, n) in zip(pats, n_subj)
+    println("Pattern: $pat, n = $n")
+
+    trial_data_pat = trial_data[trial_data.choice_pattern .== pat, :]
+    subjs = unique(trial_data_pat.subj)
+    N = length(subjs)
+    Tsubj = [length(trial_data_pat[trial_data_pat.subj .== subj, :subj]) for subj in subjs]
+    choice = Matrix{Union{Missing, Int}}(undef, N, maximum(Tsubj))
+    # outcome = Matrix{Union{Missing, Float64}}(undef, N, maximum(Tsubj))
+    payof_schemes = Vector{Union{Missing, Int}}(undef, N)
+    for (i, subj) in enumerate(subjs)
+        subj_data = trial_data_pat[trial_data_pat.subj .== subj, :]
+        choice[i, 1:Tsubj[i]] = subj_data.choice
+        # outcome[i, 1:Tsubj[i]] = subj_data.outcome
+        payof_schemes[i] = subj_data.scheme[1]
+    end
+
+    model = pvl_delta(choice, N, Tsubj, payof_schemes)
+
+    chain = sample(
+        model,
+        NUTS(),
+        MCMCThreads(),
+        1000,
+        3,
+        progress=true,
+        verbose=false
+    )
+
+    # save chain
+    pattern_name = "pattern_$pat"
+    h5open(chain_out_file, "cw") do file
+        g = create_group(file, pattern_name)
+        write(g, chain)
+    end
+
+end
 
 
-# save chain summary / info to file
-io = open("./data/pvl_data_95_chain_summary.txt", "w")
-show(io, MIME("text/plain"), chain)
-show(io, MIME("text/plain"), summarize(chain))
-show(io, MIME("text/plain"), hpd(chain))
-close(io)
 
-s = summarize(chain)
-plot(summarize(chain))
+# # save chain summary / info to file
+# io = open("./data/pvl_data_95_chain_summary.txt", "w")
+# show(io, MIME("text/plain"), chain)
+# show(io, MIME("text/plain"), summarize(chain))
+# show(io, MIME("text/plain"), hpd(chain))
+# close(io)
+
+# s = summarize(chain)
+# plot(summarize(chain))
 
 
 
