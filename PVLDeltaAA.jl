@@ -1,17 +1,12 @@
-using ForwardDiff
-using Preferences
-set_preferences!(ForwardDiff, "nansafe_mode" => true)
-using Distributions
-using Plots, StatsPlots
+#using ForwardDiff
+#using Preferences
 # using ActionModels
 # using Distributed
-using Turing
-using Optim
-using FillArrays
-using StatsFuns
-using HDF5
-using MCMCChains
-using MCMCChainsStorage
+using ReverseDiff, ForwardDiff, Tracker, Distributions, FillArrays, Optim, Turing, StatsFuns
+using HDF5, MCMCChains, MCMCChainsStorage
+using Tracker
+using Turing: AutoReverseDiff, AutoForwardDiff
+
 # using StatsBase
 # using TypeUtils
 # using ForwardDiff: value
@@ -19,11 +14,121 @@ include("src/Data.jl")
 
 
 
+# set_preferences!(ForwardDiff, "nansafe_mode" => true)
+delete_existing_chains = false
+skip_existing_chains = true
+progress = true
+Turing.setprogress!(progress)
+# Turing.setadbackend(:reversediff) # deprecated
 
-Turing.setprogress!(true)
+struct CategoricalLogit <: Distributions.DiscreteUnivariateDistribution
 
+    logitp::Vector{Float64}
+    ncats::Int
+end
 
-@model function pvl_delta(actions::Matrix{Union{Missing, Int}}, N::Int, Tsubj::Vector{Int}, payoff_scheme::Vector{Union{Missing, Int}}, ::Type{T} = Float64) where {T}
+# function Distributions.probs(d::CategoricalLogit)
+#     return exp.(d.logitp .- logsumexp(d.logitp))
+# end
+
+function Base.convert(::Type{T}, x::Tracker.TrackedReal{Tt}) where {T <: Integer, Tt <: Real}
+    if (T <: Integer)
+        return convert(T, round(ForwardDiff.value(x)))
+    end
+    return convert(T, ForwardDiff.value(x))
+end
+
+function Base.convert(::Type{R}, t::T) where {R<:Real,T<:ReverseDiff.TrackedReal}
+    if (R <: Integer)
+        return convert(R, round(ReverseDiff.value(t)))
+    end
+    return convert(R, ReverseDiff.value(t))
+end
+
+function Base.convert(::Type{T}, x::Tracker.TrackedReal{Tracker.TrackedReal{Tt}}) where {T <: Real, Tt <: Real}
+    return convert(T, ForwardDiff.value(ForwardDiff.value(x)))
+end
+
+function Distributions.insupport(d::CategoricalLogit, k::Real)
+    return isinteger(k) && 1 <= k <= d.ncats
+end
+
+function Distributions.logpdf(d::CategoricalLogit, k::Real)
+    k = convert(Int, k)
+    r = (d.logitp .- logsumexp(d.logitp))[k]
+    return r
+end
+
+function Base.minimum(d::CategoricalLogit)
+    first(support(d))
+end
+
+function Base.maximum(d::CategoricalLogit)
+    last(support(d))
+end
+
+function Distributions.support(d::CategoricalLogit)
+    return Base.OneTo(d.ncats)
+end
+
+Distributions.sampler(d::CategoricalLogit) = Distributions.AliasTable(probs(d))
+
+# function Distributions.quantile(d::CategoricalLogit, p; sorted::Bool=false, alpha::Real=1.0, beta::Real=alpha)
+#     return Distributions._quantile(d, p, sorted, alpha, beta)
+    
+# end
+
+function Base.convert(::Type{CategoricalLogit}, p::AbstractVector{<:Real})
+    return CategoricalLogit(p, length(p))
+end
+
+# implementation of the rand function for categorical (logit)
+function Distributions.rand(rng::AbstractRNG, d::CategoricalLogit)
+    x = support(d)
+    p = probs(d)
+    n = length(p)
+    draw = rand(rng, float(eltype(p)))
+    cp = p[1]
+    i = 1
+    while cp <= draw && i < n
+        @inbounds cp += p[i +=1]
+    end
+    return x[i]
+end
+
+function Distributions.ncategories(d::CategoricalLogit)
+    return d.ncats
+end
+
+# function Base.iterate(d::CategoricalLogit, state::Int = 1)
+#     if state > length(d.logitp)
+#         return nothing
+#     end
+#     return state, state + 1
+# end
+
+# function Base.getindex(d::CategoricalLogit, i::Int)
+#     return d.logitp[i]
+# end
+
+# function Base.lastindex(d::CategoricalLogit)
+#     return d.ncats
+# end
+
+# function Base.collect(d::CategoricalLogit)
+#     return collect(1:d.ncats)
+# end
+
+# function Distributions.ncategories(d::CategoricalLogit)
+#     return d.ncats
+# end
+
+# Distributions.params(d::CategoricalLogit) = (d.logitp, d.ncats)
+function noisy_softmax(x::Vector, noise::Real)
+    return exp.(x / noise) / sum(exp.(x / noise))
+end
+
+@model function pvl_delta(actions::Matrix{Union{Missing, Int}}, ::Type{T} = Float64; N::Int, Tsubj::Vector{Int}, payoff_scheme::Vector{Union{Missing, Int}}) where {T}
     # Group Level Parameters
     Aμ ~ Normal(0, 1)
     Aσ ~ Uniform(0, 1.5)
@@ -51,25 +156,34 @@ Turing.setprogress!(true)
         Evₖ = zeros(T, Tsubj[i], 4)
         
         # Set theta
-        θ = 3^c[i] - 1
+        θ = log(3^c[i] - 1)
         payoffs = construct_payoff_sequence(payoff_scheme[i])
         for t in 1:Tsubj[i]
             # Get choice probabilities (random on first trial, otherwise softmax of expected utility)
-            try
-                choice_proabilities = t == 1 ? fill(0.25, 4) : softmax(θ .* Evₖ[t-1, :])
-                # softmax choice (draw)
-                actions[i, t] = rand(Categorical(choice_proabilities))
-            catch e
-                println("t: ", t)
-                println("i: ", i)
-                println("Evₖ[t-1, :]: ", Evₖ[t-1, :])
-                println("θ: ", θ)
-                println("c[i]", c[i])
-                println("w[i]", w[i])
-                println("A[i]", A[i])
-                println("a[i]", a[i])
-                throw(e)
-            end
+            # softmax choice (draw)
+            # pₖ = t == 1 ? fill(0.25, 4) : softmax(Tracker.value(θ) .* Tracker.value(Evₖ[t-1, :]))
+            pₖ = t == 1 ? fill(0.25, 4) : noisy_softmax(Evₖ[t-1, :], θ)
+            # try in log space
+            # pₖ = t == 1 ? fill(log(0.25), 4) : θ .+ Evₖ[t-1, :]
+            # try
+            # kₜ ~ CategoricalLogit(pₖ, 4)
+            # actions[i, t] = kₜ
+            # actions[i, t] ~ CategoricalLogit(pₖ, 4)
+            actions[i, t] ~ Categorical(pₖ, 4)
+            # catch e
+            #     println("t: ", t)
+            #     println("i: ", i)
+            #     if t > 1
+            #         println("Evₖ[t-1, :]: ", Evₖ[t-1, :])
+            #     end
+            #     println("θ: ", θ)
+            #     println("c[i]", c[i])
+            #     println("w[i]", w[i])
+            #     println("A[i]", A[i])
+            #     println("a[i]", a[i])
+            #     println("pₖ ", pₖ)
+            #     throw(e)
+            # end
             # get the result for the selected deck
             k = actions[i, t]
             
@@ -83,10 +197,14 @@ Turing.setprogress!(true)
             # update expected value of selected deck
             Evₖ[t, k] = Evₖ₍ₜ₋₁₎[k] + a[i] * (uₖ - Evₖ₍ₜ₋₁₎[k])
             # all other decks carry on their previous value
-            Evₖ[t, 1:end .!= k] = Evₖ₍ₜ₋₁₎[1:end .!= k]
+            for j in 1:4
+                if j != k
+                    Evₖ[t, j] = Evₖ₍ₜ₋₁₎[j]
+                end
+            end
         end
     end
-    # return actions
+    return actions
 end
 
 
@@ -138,8 +256,8 @@ trial_data.choice_pattern_ac = ifelse.(trial_data.ac_ratio .>= 0.65, 8, 0)
 
 trial_data.choice_pattern = trial_data.choice_pattern_ab .| trial_data.choice_pattern_cd .| trial_data.choice_pattern_bd .| trial_data.choice_pattern_ac
 # just one subject to test
-# trial_data = trial_data[trial_data.subj .== 1, :]
-# trial_data = trial_data[trial_data.study .== "Steingroever2011", :]
+#trial_data = trial_data[trial_data.subj .== 1, :]
+#trial_data = trial_data[trial_data.study .== "Steingroever2011", :]
 
 #patterns
 pats = unique(trial_data.choice_pattern)
@@ -150,13 +268,25 @@ n_subj = [length(unique(trial_data[trial_data.choice_pattern .== pat, :subj])) f
 chain_out_file = "./data/igt_pvldelta_data_chains.h5"
 
 # delete chain file if it exists
-if isfile(chain_out_file)
+processed_patterns = []
+if delete_existing_chains && isfile(chain_out_file)
     print("Deleting file: $chain_out_file")
     rm(chain_out_file)
+elseif skip_existing_chains && isfile(chain_out_file)
+    # get patterns that have already been processed
+    h5open(chain_out_file, "r") do file
+        processed_patterns = keys(file)
+        # pats = setdiff(pats, processed_patterns)
+    end
 end
 # print out
+chains::Dict{String, Chains} = Dict()
 for (pat, n) in zip(pats, n_subj)
     println("Pattern: $pat, n = $n")
+    if "pattern_$pat" in processed_patterns
+        println("Pattern $pat already processed, skipping...")
+        continue
+    end
 
     trial_data_pat = trial_data[trial_data.choice_pattern .== pat, :]
     subjs = unique(trial_data_pat.subj)
@@ -164,25 +294,27 @@ for (pat, n) in zip(pats, n_subj)
     Tsubj = [length(trial_data_pat[trial_data_pat.subj .== subj, :subj]) for subj in subjs]
     choice = Matrix{Union{Missing, Int}}(undef, N, maximum(Tsubj))
     # outcome = Matrix{Union{Missing, Float64}}(undef, N, maximum(Tsubj))
-    payof_schemes = Vector{Union{Missing, Int}}(undef, N)
+    payoff_schemes = Vector{Union{Missing, Int}}(undef, N)
     for (i, subj) in enumerate(subjs)
         subj_data = trial_data_pat[trial_data_pat.subj .== subj, :]
         choice[i, 1:Tsubj[i]] = subj_data.choice
         # outcome[i, 1:Tsubj[i]] = subj_data.outcome
-        payof_schemes[i] = subj_data.scheme[1]
+        payoff_schemes[i] = subj_data.scheme[1]
     end
 
-    model = pvl_delta(choice, N, Tsubj, payof_schemes)
+    model = pvl_delta(choice; N=N, Tsubj=Tsubj, payoff_scheme=payoff_schemes)
 
     chain = sample(
         model,
-        NUTS(),
-        MCMCThreads(),
-        1000,
+        NUTS(; adtype=AutoReverseDiff(true)),
+        MCMCThreads(), # disable for debugging
+        3000,
         3,
-        progress=true,
-        verbose=false
+        progress=progress,
+        verbose=false;
+        save_state=true
     )
+    chains["pattern_$pat"] = chain
 
     # save chain
     pattern_name = "pattern_$pat"
@@ -193,8 +325,17 @@ for (pat, n) in zip(pats, n_subj)
 
 end
 
+# load chain
+
+# h5open(chain_out_file, "r") do file
+#     for pat in pats
+#         pattern_name = "pattern_$pat"
+#         chains[pattern_name] = read(file[pattern_name], Chains)
+#     end
+# end
 
 
+rand(Categorical([0.25, 0.25, 0.25, 0.25]), 1)
 # # save chain summary / info to file
 # io = open("./data/pvl_data_95_chain_summary.txt", "w")
 # show(io, MIME("text/plain"), chain)
