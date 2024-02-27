@@ -1,7 +1,6 @@
 using LinearAlgebra
 LinearAlgebra.BLAS.set_num_threads(1)  # possible julia/windows bug fix?
-using Distributions
-using Plots, StatsPlots
+using ReverseDiff, Distributions, Optim, Turing, StatsFuns
 using ActionModels
 using HierarchicalGaussianFiltering
 using Distributed
@@ -9,6 +8,8 @@ using HDF5
 using MCMCChains
 using MCMCChainsStorage
 
+
+delete_existing_chains = true
 # using JLD
 #using StatsFuns
 include("Data.jl")
@@ -20,6 +21,7 @@ addprocs(6)
 @everywhere using HierarchicalGaussianFiltering
 @everywhere using ActionModels
 @everywhere using Distributions
+@everywhere using ReverseDiff
 #@everywhere using StatsFuns
 
 @everywhere function noisy_softmax(x::Vector, noise::Real)
@@ -258,21 +260,6 @@ trial_data = load_trial_data(
     "./data/IGTdataSteingroever2014/IGTdata.rdata",
     true
 )
-
-# match Steingroever et al (2013)
-
-# only get trials where
-# - cd_ratio >= 0.65
-# - ab_ratio >= 0.65
-# - bd_ratio >= 0.65
-# - ac_ratio >= 0.65
-# trial_data = trial_data[
-#     (trial_data.cd_ratio .>= 0.65) .| 
-#     (trial_data.ab_ratio .>= 0.65) .| 
-#     (trial_data.bd_ratio .>= 0.65) .|
-#     (trial_data.ac_ratio .>= 0.65), :
-# ]
-
 # add a "choice pattern" column
 # 1 = CD >= 0.65, 2 = AB >= 0.65, 4 = BD >= 0.65, 8 = AC >= 0.65
 trial_data.choice_pattern_ab = ifelse.(trial_data.ab_ratio .>= 0.65, 1, 0)
@@ -281,12 +268,16 @@ trial_data.choice_pattern_bd = ifelse.(trial_data.bd_ratio .>= 0.65, 4, 0)
 trial_data.choice_pattern_ac = ifelse.(trial_data.ac_ratio .>= 0.65, 8, 0)
 
 trial_data.choice_pattern = trial_data.choice_pattern_ab .| trial_data.choice_pattern_cd .| trial_data.choice_pattern_bd .| trial_data.choice_pattern_ac
+# just one subject to test
+#trial_data = trial_data[trial_data.subj .== 1, :]
+#trial_data = trial_data[trial_data.study .== "Steingroever2011", :]
 
 #patterns
 pats = unique(trial_data.choice_pattern)
 
 # get number of unique subjects for each pattern
 n_subj = [length(unique(trial_data[trial_data.choice_pattern .== pat, :subj])) for pat in pats]
+
 # print out
 for (pat, n) in zip(pats, n_subj)
     println("Pattern: $pat, n = $n")
@@ -296,10 +287,14 @@ end
 @everywhere priors = $priors
 @everywhere trial_data = $trial_data
 
+sampler = NUTS(; adtype=AutoReverseDiff(true))
+@everywhere sampler = $sampler
+
 result = fit_model(
     agent,
     priors,
     trial_data,
+    sampler = sampler,
     independent_group_cols = ["choice_pattern"],
     multilevel_group_cols = ["subj"],
     input_cols = ["outcome"],
@@ -310,11 +305,16 @@ result = fit_model(
     #n_samples = 1000,
     n_samples = 1000,
     verbose = false,
-    progress = true,
+    progress = true
 )
 
+chain_out_file = "./data/igt_hgf_data_chains.h5"
 # save chains
-h5open("./data/igt_data_chains_data.h5", "w") do file
+if delete_existing_chains && isfile(chain_out_file)
+    print("Deleting file: $chain_out_file")
+    rm(chain_out_file)
+end
+h5open(chain_out_file, "w") do file
     # save a group for each result (choice_pattern)
     for (pat, chain) in result
         out_group = "choice_pattern_$pat"
