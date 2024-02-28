@@ -14,7 +14,7 @@ delete_existing_chains = true
 #using StatsFuns
 include("Data.jl")
 
-addprocs(6)
+addprocs(8)
 # include("Data.jl")
 @everywhere using LinearAlgebra
 @everywhere LinearAlgebra.BLAS.set_num_threads(1)  # possible julia/windows bug fix?
@@ -299,7 +299,7 @@ result = fit_model(
     multilevel_group_cols = ["subj"],
     input_cols = ["outcome"],
     action_cols = ["next_choice"], # use the following row's choice as the action
-    n_cores = 6,
+    n_cores = 8,
     #n_chains = 4,
     n_chains = 3,
     #n_samples = 1000,
