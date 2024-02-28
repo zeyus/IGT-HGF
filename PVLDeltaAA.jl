@@ -1,53 +1,26 @@
-#using ForwardDiff
-#using Preferences
-# using ActionModels
-# using Distributed
 using ReverseDiff, ForwardDiff, Tracker, Distributions, FillArrays, Optim, Turing, StatsFuns
 using HDF5, MCMCChains, MCMCChainsStorage
 using Tracker
 using Turing: AutoReverseDiff, AutoForwardDiff
 
-# using StatsBase
-# using TypeUtils
-# using ForwardDiff: value
 include("src/Data.jl")
-
-
-
-# set_preferences!(ForwardDiff, "nansafe_mode" => true)
 delete_existing_chains = false
 skip_existing_chains = true
 progress = true
 Turing.setprogress!(progress)
-# Turing.setadbackend(:reversediff) # deprecated
 
 struct CategoricalLogit <: Distributions.DiscreteUnivariateDistribution
-
-    logitp::Vector{Float64}
+    logitp::AbstractArray{<:Real, 1}
     ncats::Int
 end
 
-# function Distributions.probs(d::CategoricalLogit)
-#     return exp.(d.logitp .- logsumexp(d.logitp))
+# # This might have unintended consequences
+# function Base.convert(::Type{R}, t::T) where {R<:Real,T<:ReverseDiff.TrackedReal}
+#     if (R <: Integer)
+#         return convert(R, round(ReverseDiff.value(t)))
+#     end
+#     return convert(R, ReverseDiff.value(t))
 # end
-
-function Base.convert(::Type{T}, x::Tracker.TrackedReal{Tt}) where {T <: Integer, Tt <: Real}
-    if (T <: Integer)
-        return convert(T, round(ForwardDiff.value(x)))
-    end
-    return convert(T, ForwardDiff.value(x))
-end
-
-function Base.convert(::Type{R}, t::T) where {R<:Real,T<:ReverseDiff.TrackedReal}
-    if (R <: Integer)
-        return convert(R, round(ReverseDiff.value(t)))
-    end
-    return convert(R, ReverseDiff.value(t))
-end
-
-function Base.convert(::Type{T}, x::Tracker.TrackedReal{Tracker.TrackedReal{Tt}}) where {T <: Real, Tt <: Real}
-    return convert(T, ForwardDiff.value(ForwardDiff.value(x)))
-end
 
 function Distributions.insupport(d::CategoricalLogit, k::Real)
     return isinteger(k) && 1 <= k <= d.ncats
@@ -73,10 +46,6 @@ end
 
 Distributions.sampler(d::CategoricalLogit) = Distributions.AliasTable(probs(d))
 
-# function Distributions.quantile(d::CategoricalLogit, p; sorted::Bool=false, alpha::Real=1.0, beta::Real=alpha)
-#     return Distributions._quantile(d, p, sorted, alpha, beta)
-    
-# end
 
 function Base.convert(::Type{CategoricalLogit}, p::AbstractVector{<:Real})
     return CategoricalLogit(p, length(p))
@@ -100,32 +69,16 @@ function Distributions.ncategories(d::CategoricalLogit)
     return d.ncats
 end
 
-# function Base.iterate(d::CategoricalLogit, state::Int = 1)
-#     if state > length(d.logitp)
-#         return nothing
-#     end
-#     return state, state + 1
-# end
+function action_probabilities(x::AbstractVector{<:Real}, τ::Real)
+    xₘₐₓ = maximum(x)
+    xₙ = x .- xₘₐₓ
+    return exp.(xₙ * τ) / sum(exp.(xₙ * τ))
+end
 
-# function Base.getindex(d::CategoricalLogit, i::Int)
-#     return d.logitp[i]
-# end
-
-# function Base.lastindex(d::CategoricalLogit)
-#     return d.ncats
-# end
-
-# function Base.collect(d::CategoricalLogit)
-#     return collect(1:d.ncats)
-# end
-
-# function Distributions.ncategories(d::CategoricalLogit)
-#     return d.ncats
-# end
-
-# Distributions.params(d::CategoricalLogit) = (d.logitp, d.ncats)
-function noisy_softmax(x::Vector, noise::Real)
-    return exp.(x / noise) / sum(exp.(x / noise))
+function log_action_probabilities(x::AbstractVector{<:Real}, τ::Real)
+    xₘₐₓ = maximum(x)
+    xₙ = x .- xₘₐₓ
+    return log.(exp.(xₙ * τ) / sum(exp.(xₙ * τ)))
 end
 
 @model function pvl_delta(actions::Matrix{Union{Missing, Int}}, ::Type{T} = Float64; N::Int, Tsubj::Vector{Int}, payoff_scheme::Vector{Union{Missing, Int}}) where {T}
@@ -154,46 +107,28 @@ end
     for i in 1:N
         # Define values
         Evₖ = zeros(T, Tsubj[i], 4)
-        
         # Set theta
-        θ = log(3^c[i] - 1)
+        θ = 3^c[i] - 1
         payoffs = construct_payoff_sequence(payoff_scheme[i])
         for t in 1:Tsubj[i]
-            # Get choice probabilities (random on first trial, otherwise softmax of expected utility)
-            # softmax choice (draw)
-            # pₖ = t == 1 ? fill(0.25, 4) : softmax(Tracker.value(θ) .* Tracker.value(Evₖ[t-1, :]))
-            pₖ = t == 1 ? fill(0.25, 4) : noisy_softmax(Evₖ[t-1, :], θ)
-            # try in log space
-            # pₖ = t == 1 ? fill(log(0.25), 4) : θ .+ Evₖ[t-1, :]
-            # try
-            # kₜ ~ CategoricalLogit(pₖ, 4)
-            # actions[i, t] = kₜ
-            # actions[i, t] ~ CategoricalLogit(pₖ, 4)
-            actions[i, t] ~ Categorical(pₖ, 4)
-            # catch e
-            #     println("t: ", t)
-            #     println("i: ", i)
-            #     if t > 1
-            #         println("Evₖ[t-1, :]: ", Evₖ[t-1, :])
-            #     end
-            #     println("θ: ", θ)
-            #     println("c[i]", c[i])
-            #     println("w[i]", w[i])
-            #     println("A[i]", A[i])
-            #     println("a[i]", a[i])
-            #     println("pₖ ", pₖ)
-            #     throw(e)
-            # end
-            # get the result for the selected deck
-            k = actions[i, t]
-            
+            # Get previous expected values (all decks start at 0)
+            Evₖ₍ₜ₋₁₎ = t == 1 ? fill(0.0, 4) : Evₖ[t-1, :]
+            # softmax choice
+            # Pₖ = action_probabilities(Evₖ₍ₜ₋₁₎, θ)
+            Pₖ = log_action_probabilities(Evₖ₍ₜ₋₁₎, θ)
+            # draw from categorical distribution based on softmax
+            # actions[i, t] ~ Categorical(Pₖ)
+            actions[i, t] ~ CategoricalLogit(Pₖ, 4)
+            # get selected deck
+            k = ReverseDiff.value(actions[i, t])
+            # get payoff (this needs to be calculated at runtime, unless we recreate the deck logic here, maybe better?)
             Xₜ = igt_deck_payoff!(actions[i, 1:t], payoffs, Int)
             # get prospect utility
             uₖ = (Xₜ >= 0) ? Xₜ^A[i] : -w[i] * abs(Xₜ)^A[i]
             
             # delta learning rule
             # get previous selection
-            Evₖ₍ₜ₋₁₎ = t == 1 ? fill(0.0, 4) : Evₖ[t-1, :]
+            
             # update expected value of selected deck
             Evₖ[t, k] = Evₖ₍ₜ₋₁₎[k] + a[i] * (uₖ - Evₖ₍ₜ₋₁₎[k])
             # all other decks carry on their previous value
@@ -304,15 +239,32 @@ for (pat, n) in zip(pats, n_subj)
 
     model = pvl_delta(choice; N=N, Tsubj=Tsubj, payoff_scheme=payoff_schemes)
 
+    # generate MAP estimate
+    n_chains = 3
+    estimated_params = nothing
+    println("Estimating initial parameters for $pat...")
+    est_start = time()
+    map_estimate = optimize(model, MAP(), NelderMead())
+    est_time = time() - est_start
+    println("Estimation for $pat took $est_time seconds")
+    if Optim.converged(map_estimate.optim_result)
+        println("MAP estimate converged for $pat, using as initial parameters for sampling...")
+        estimated_params = [repeat([map_estimate.values.array], n_chains)...]
+    else
+        println("MAP estimate did not converge for $pat")
+    end
+    
+    
     chain = sample(
         model,
-        NUTS(; adtype=AutoReverseDiff(true)),
+        NUTS(-1, 0.65; adtype=AutoReverseDiff(true)), # explicit defaults: -1: uses max(n_samples/2, 500) ?!?, 0.65: target acceptance rate. Adtype is set to AutoReverseDiff isntead of ForwardDiff
         MCMCThreads(), # disable for debugging
-        3000,
-        3,
+        1000,
+        n_chains,
         progress=progress,
         verbose=false;
-        save_state=true
+        save_state=true,
+        initial_params=estimated_params,
     )
     chains["pattern_$pat"] = chain
 
