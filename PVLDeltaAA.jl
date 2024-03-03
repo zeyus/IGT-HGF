@@ -1,13 +1,30 @@
-using ReverseDiff, ForwardDiff, Tracker, Distributions, FillArrays, Optim, Turing, StatsFuns
+using ReverseDiff, Distributions, FillArrays, Optim, Turing, StatsFuns
 using HDF5, MCMCChains, MCMCChainsStorage
 using Tracker
-using Turing: AutoReverseDiff, AutoForwardDiff
+using Turing: AutoForwardDiff, ForwardDiff, AutoReverseDiff
 
 include("src/Data.jl")
 delete_existing_chains = false
 skip_existing_chains = true
 progress = true
+optim_param_est = false
+
 Turing.setprogress!(progress)
+
+function ad_val(x::ReverseDiff.TrackedReal)
+    return ReverseDiff.value(x)
+end
+function ad_val(x::ReverseDiff.TrackedArray)
+    return ReverseDiff.value(x)
+end
+
+function ad_val(x::ForwardDiff.Dual)
+    return ForwardDiff.value(x)
+end
+
+function ad_val(x::Real)
+    return x
+end
 
 struct CategoricalLogit <: Distributions.DiscreteUnivariateDistribution
     logitp::AbstractArray{<:Real, 1}
@@ -75,105 +92,100 @@ function action_probabilities(x::AbstractVector{<:Real}, τ::Real)
     return exp.(xₙ * τ) / sum(exp.(xₙ * τ))
 end
 
-function log_action_probabilities(x::AbstractVector{<:Real}, τ::Real)
+function logit_action_probabilities(x::AbstractVector{<:Real}, τ::Real)
     xₘₐₓ = maximum(x)
     xₙ = x .- xₘₐₓ
-    return log.(exp.(xₙ * τ) / sum(exp.(xₙ * τ)))
+    xₙ = exp.(logistic.(xₙ) * τ)
+    return logit.(xₙ / sum(xₙ)) # + xₘₐₓ # ???
 end
 
-@model function pvl_delta(actions::Matrix{Union{Missing, Int}}, ::Type{T} = Float64; N::Int, Tsubj::Vector{Int}, payoff_scheme::Vector{Union{Missing, Int}}) where {T}
+@model function pvl_delta(actions::Matrix{Union{Missing, Int}}, ::Type{T} = Float64; N::Int, Tsubj::Vector{Int}, deck_payoffs::Array{Int, 4}) where {T}
     # Group Level Parameters
-    Aμ ~ Normal(0, 1)
-    Aσ ~ Uniform(0, 1.5)
-    aμ ~ Normal(0, 1)
-    aσ ~ Uniform(0, 1.5)
-    cμ ~ Normal(0, 1)
-    cσ ~ Uniform(0, 1.5)
-    wμ ~ Normal(0, 1)
-    wσ ~ Uniform(0, 1.5)
-    
+    # Group level Shape mean
+    A′μ ~ Normal(0, 1)
+    # Group level Shape standard deviation
+    A′σ ~ Uniform(0, 1.5)
+
+    # Group level updating parameter mean
+    a′μ ~ Normal(0, 1)
+    # Group level updating parameter standard deviation
+    a′σ ~ Uniform(0, 1.5)
+
+    # Group level response consistency mean
+    c′μ ~ Normal(0, 1)
+    # Group level response consistency standard deviation
+    c′σ ~ Uniform(0, 1.5)
+
+    # Group Level Loss-Aversion mean
+    w′μ ~ Normal(0, 1)
+    # Group Level Loss-Aversion standard deviation
+    w′σ ~ Uniform(0, 1.5)
+
     # individual parameters
-    A ~ filldist(LogitNormal(Aμ, Aσ), N)
-    a ~ filldist(LogitNormal(aμ, aσ), N)
-    # had to truncat to match paper
-    # and avoid Inf values for θ
-    c ~ filldist(truncated(LogNormal(cμ, cσ); upper=5), N)
-    w ~ filldist(truncated(LogNormal(cμ, cσ); upper=5), N)
-    
+    # Shape
+    A′ ~ filldist(LogitNormal(A′μ, A′σ), N)
+    # Updating parameter
+    a′ ~ filldist(LogitNormal(a′μ, a′σ), N)
+    # Response consistency
+    c′ ~ filldist(truncated(LogNormal(c′μ, c′σ); upper=3), N)
+    # Loss-Aversion
+    w′ ~ filldist(truncated(LogNormal(w′μ, w′σ); upper=3), N)
+
+    # create actions matrix if using the model for simulation
     if actions === missing
         actions = Matrix{Union{Missing, Int}}(undef, N, maximum(Tsubj))
     end
 
     for i in 1:N
-        # Define values
+        Aᵢ = A′[i] # Aᵢ = ϕ(A′ᵢ) -> achieved through logitnormal
+        aᵢ = a′[i] # aᵢ = ϕ(a′ᵢ) -> achieved through logitnormal
+        cᵢ = c′[i] # cᵢ = ϕ(c′ᵢ) * 5  -> achieved through truncated LogNormal
+        wᵢ = w′[i] # wᵢ = ϕ(w′ᵢ) * 5 -> achieved through truncated LogNormal
+        # Create expected value matrix
         Evₖ = zeros(T, Tsubj[i], 4)
-        # Set theta
-        θ = 3^c[i] - 1
-        payoffs = construct_payoff_sequence(payoff_scheme[i])
-        for t in 1:Tsubj[i]
+        # Set theta (exploration vs exploitation)
+        θ = 3^cᵢ - 1
+
+        # start each deck at the first card
+        deck_sequence_index = [1, 1, 1, 1]
+
+        for t in 2:(Tsubj[i])
             # Get previous expected values (all decks start at 0)
-            Evₖ₍ₜ₋₁₎ = t == 1 ? fill(0.0, 4) : Evₖ[t-1, :]
+            Evₖ₍ₜ₋₁₎ = Evₖ[t-1, :]
+
             # softmax choice
-            # Pₖ = action_probabilities(Evₖ₍ₜ₋₁₎, θ)
-            Pₖ = log_action_probabilities(Evₖ₍ₜ₋₁₎, θ)
+            Pₖ = action_probabilities(Evₖ₍ₜ₋₁₎, θ)
+
             # draw from categorical distribution based on softmax
-            # actions[i, t] ~ Categorical(Pₖ)
-            actions[i, t] ~ CategoricalLogit(Pₖ, 4)
-            # get selected deck
-            k = ReverseDiff.value(actions[i, t])
-            # get payoff (this needs to be calculated at runtime, unless we recreate the deck logic here, maybe better?)
-            Xₜ = igt_deck_payoff!(actions[i, 1:t], payoffs, Int)
-            # get prospect utility
-            uₖ = (Xₜ >= 0) ? Xₜ^A[i] : -w[i] * abs(Xₜ)^A[i]
-            
+            actions[i, t-1] ~ Categorical(Pₖ)
+
+            # get selected deck: ad_val function avoids switching functions if using a different AD backend
+            k = ad_val(actions[i, t-1])
+
+            # get payoff for selected deck
+            Xₜ = deck_payoffs[i, deck_sequence_index[k], k, 1]
+
+            # get win/loss status: loss = 1, win = 0
+            l = deck_payoffs[i, deck_sequence_index[k], k, 2]
+
+            # increment deck sequence index (this is because each deck has a unique payoff sequence)
+            deck_sequence_index[k] += 1
+
+            # get prospect utility -> same as paper but without having to use logic: uₖ = (Xₜ >= 0) ? Xₜ^Aᵢ : -wᵢ * abs(Xₜ)^Aᵢ
+            Xₜᴾ = abs(Xₜ)^Aᵢ
+            uₖ = (l * -wᵢ * Xₜᴾ) + ((1 - l) * Xₜᴾ)
+
+            # update expected value of selected deck, carry forward the rest
+            Evₖ[t, :] = Evₖ₍ₜ₋₁₎
+
             # delta learning rule
-            # get previous selection
-            
-            # update expected value of selected deck
-            Evₖ[t, k] = Evₖ₍ₜ₋₁₎[k] + a[i] * (uₖ - Evₖ₍ₜ₋₁₎[k])
-            # all other decks carry on their previous value
-            for j in 1:4
-                if j != k
-                    Evₖ[t, j] = Evₖ₍ₜ₋₁₎[j]
-                end
-            end
+            Evₖ[t, k] += aᵢ * (uₖ - Evₖ₍ₜ₋₁₎[k])
         end
     end
     return actions
 end
 
 
-
-# N = 3
-# ntrials = 50
-# Tsubj = Vector{Int}(fill(ntrials, N))
-# simulated_choice = Matrix{Union{Missing, Int}}(fill(missing, N, ntrials))
-
-# # now let's fit the model to the simulated data
-# sim_model = pvl_delta(simulated_choice, N, Tsubj)
-# sim_chain = sample(
-#     sim_model,
-#     NUTS(),
-#     MCMCThreads(),
-#     1000,
-#     4,
-#     progress=true,
-#     verbose=false,
-# )
-
-# # plot the chain
-# plot(sim_chain)
-# # save plot
-# savefig("./figures/pvl_simulated_data.png")
-
-# # save chain summary / info to file
-
-
-# io = open("./data/pvl_sim_chain_summary.txt", "w")
-# show(io, MIME("text/plain"), sim_chain)
-# show(io, MIME("text/plain"), summarize(sim_chain))
-# show(io, MIME("text/plain"), hpd(sim_chain))
-# close(io)
 
 ##############################################
 # Real Data                                  #
@@ -191,10 +203,10 @@ trial_data.choice_pattern_ac = ifelse.(trial_data.ac_ratio .>= 0.65, 8, 0)
 
 trial_data.choice_pattern = trial_data.choice_pattern_ab .| trial_data.choice_pattern_cd .| trial_data.choice_pattern_bd .| trial_data.choice_pattern_ac
 # just one subject to test
-#trial_data = trial_data[trial_data.subj .== 1, :]
-#trial_data = trial_data[trial_data.study .== "Steingroever2011", :]
+# trial_data = trial_data[trial_data.subj .== 1, :]
+# trial_data = trial_data[trial_data.study .== "Steingroever2011", :]
 
-#patterns
+# patterns
 pats = unique(trial_data.choice_pattern)
 
 # get number of unique subjects for each pattern
@@ -205,8 +217,14 @@ chain_out_file = "./data/igt_pvldelta_data_chains.h5"
 # delete chain file if it exists
 processed_patterns = []
 if delete_existing_chains && isfile(chain_out_file)
-    print("Deleting file: $chain_out_file")
-    rm(chain_out_file)
+    print("Deleting file: $chain_out_file, are you sure? (y/n)")
+    # wait for user confirmation
+    conf = readline()
+    if conf == "y"
+        rm(chain_out_file)
+    else
+        exit()
+    end
 elseif skip_existing_chains && isfile(chain_out_file)
     # get patterns that have already been processed
     h5open(chain_out_file, "r") do file
@@ -222,48 +240,67 @@ for (pat, n) in zip(pats, n_subj)
         println("Pattern $pat already processed, skipping...")
         continue
     end
-
     trial_data_pat = trial_data[trial_data.choice_pattern .== pat, :]
-    subjs = unique(trial_data_pat.subj)
+    trial_data_pat.subj_uid = join.(zip(trial_data_pat.study, trial_data_pat.subj), "_")
+    # get unique subjects (subject_id and study_id)
+    subjs = unique(trial_data_pat.subj_uid) 
     N = length(subjs)
-    Tsubj = [length(trial_data_pat[trial_data_pat.subj .== subj, :subj]) for subj in subjs]
+    Tsubj = [length(trial_data_pat[trial_data_pat.subj_uid .== subj, :subj]) for subj in subjs]
     choice = Matrix{Union{Missing, Int}}(undef, N, maximum(Tsubj))
-    # outcome = Matrix{Union{Missing, Float64}}(undef, N, maximum(Tsubj))
-    payoff_schemes = Vector{Union{Missing, Int}}(undef, N)
+
+    # this array is overlarge but not sure how to reduce it
+    # sparse array maybe?
+    deck_payoffs = Array{Int, 4}(undef, N, maximum(Tsubj), 4, 2)
+    payoff_schemes = Vector{Int}(undef, N)
     for (i, subj) in enumerate(subjs)
-        subj_data = trial_data_pat[trial_data_pat.subj .== subj, :]
+        subj_data = trial_data_pat[trial_data_pat.subj_uid .== subj, :]
         choice[i, 1:Tsubj[i]] = subj_data.choice
-        # outcome[i, 1:Tsubj[i]] = subj_data.outcome
+        for j in 1:4
+            results_j = round.(Int, subj_data[subj_data.choice .== j, :outcome])
+            n_results_j = length(results_j)
+            deck_payoffs[i, 1:n_results_j, j, 1] = results_j
+            deck_payoffs[i, 1:n_results_j, j, 2] = Int.(results_j .< 0)
+        end
         payoff_schemes[i] = subj_data.scheme[1]
     end
-
-    model = pvl_delta(choice; N=N, Tsubj=Tsubj, payoff_scheme=payoff_schemes)
+    # if simulated
+    # deck_payoffs = construct_payoff_matrix_of_length(N, Tsubj, payoff_schemes)
+    model = pvl_delta(choice; N=N, Tsubj=Tsubj, deck_payoffs=deck_payoffs)
 
     # generate MAP estimate
     n_chains = 3
     estimated_params = nothing
-    println("Estimating initial parameters for $pat...")
-    est_start = time()
-    map_estimate = optimize(model, MAP(), NelderMead())
-    est_time = time() - est_start
-    println("Estimation for $pat took $est_time seconds")
-    if Optim.converged(map_estimate.optim_result)
-        println("MAP estimate converged for $pat, using as initial parameters for sampling...")
-        estimated_params = [repeat([map_estimate.values.array], n_chains)...]
+    if optim_param_est
+        println("Using Optim to estimate initial parameters for $pat...")
+        est_start = time()
+        mle_estimate = optimize(model, MLE(), LBFGS(); autodiff = :reverse)
+        est_time = time() - est_start
+        println("Estimation for $pat took $est_time seconds")
+        if Optim.converged(mle_estimate.optim_result)
+            println("MLE estimate converged for $pat, using as initial parameters for sampling...")
+            println(mle_estimate.values.array)
+            print(mle_estimate)
+            estimated_params = [repeat([mle_estimate.values.array], n_chains)...]
+        else
+            println("MLE estimate did not converge for $pat")
+        end
     else
-        println("MAP estimate did not converge for $pat")
+        println("Not using Optim to estimate initial parameters for $pat...")
     end
-    
-    
+    # defaults: -1: uses max(n_samples/2, 500) ?!?, 0.65: target acceptance rate; Adtype is set to ForwardDiff by default
+    # sampler = NUTS()
+    # sampler = NUTS(500, 0.65; max_depth=10, adtype=AutoForwardDiff(; chunksize=0))
+    sampler = NUTS(500, 0.65; max_depth=10, adtype=AutoReverseDiff(true)) 
+
     chain = sample(
         model,
-        NUTS(-1, 0.65; adtype=AutoReverseDiff(true)), # explicit defaults: -1: uses max(n_samples/2, 500) ?!?, 0.65: target acceptance rate. Adtype is set to AutoReverseDiff isntead of ForwardDiff
+        sampler,
         MCMCThreads(), # disable for debugging
-        1000,
+        1_000,
         n_chains,
         progress=progress,
         verbose=false;
-        save_state=true,
+        save_state=false,
         initial_params=estimated_params,
     )
     chains["pattern_$pat"] = chain
