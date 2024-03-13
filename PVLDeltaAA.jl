@@ -1,6 +1,5 @@
 using ForwardDiff, Zygote, ReverseDiff, Distributions, FillArrays, Optim, Turing, StatsFuns
 using HDF5, MCMCChains, MCMCChainsStorage
-using Tracker
 using Turing: AutoForwardDiff, ForwardDiff, AutoReverseDiff, AutoZygote
 
 include("src/Data.jl")
@@ -9,8 +8,8 @@ delete_existing_chains = true
 skip_existing_chains = true
 progress = true
 optim_param_est = false
-# adtype = AutoReverseDiff(true)
-adtype = AutoZygote()
+adtype = AutoReverseDiff(true)
+# adtype = AutoZygote()
 
 Turing.setprogress!(progress)
 
