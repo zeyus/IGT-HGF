@@ -93,10 +93,17 @@ function Distributions.ncategories(d::CategoricalLogit)
     return d.ncats
 end
 
+# function action_probabilities(x::AbstractVector{<:Real}, τ::Real)
+#     xₘₐₓ = maximum(x)
+#     xₙ = x .- xₘₐₓ
+#     return exp.(xₙ * τ) / sum(exp.(xₙ * τ))
+# end
+
 function action_probabilities(x::AbstractVector{<:Real}, τ::Real)
     xₘₐₓ = maximum(x)
     xₙ = x .- xₘₐₓ
-    return exp.(xₙ * τ) / sum(exp.(xₙ * τ))
+    xₙ = exp.(xₙ * τ)
+    return xₙ / sum(xₙ)
 end
 
 function logit_action_probabilities(x::AbstractVector{<:Real}, τ::Real)
@@ -154,7 +161,9 @@ end
         θ = 3^cᵢ - 1
 
         # Create expected value matrix
-        Evₖ = zeros(T, Tsubj[i], 4)
+        # Evₖ = zeros(T, Tsubj[i], 4)
+        # This can be a vector, and we just update the deck.
+        Evₖ = zeros(T, 4)
         
         # start each deck at the first card
         deck_sequence_index = [1, 1, 1, 1]
@@ -162,7 +171,8 @@ end
         # loop over trials
         for t in 2:(Tsubj[i])
             # Get previous expected values (all decks start at 0)
-            Evₖ₍ₜ₋₁₎ = Evₖ[t-1, :]
+            # Evₖ₍ₜ₋₁₎ = Evₖ[t-1, :]
+            Evₖ₍ₜ₋₁₎ = Evₖ
 
             # softmax choice
             Pₖ = action_probabilities(Evₖ₍ₜ₋₁₎, θ)
@@ -187,10 +197,10 @@ end
             uₖ = (l * -wᵢ * Xₜᴾ) + ((1 - l) * Xₜᴾ)
 
             # update expected value of selected deck, carry forward the rest
-            Evₖ[t, :] = Evₖ₍ₜ₋₁₎
+            # Evₖ[t, :] = Evₖ₍ₜ₋₁₎
 
             # delta learning rule
-            Evₖ[t, k] += aᵢ * (uₖ - Evₖ₍ₜ₋₁₎[k])
+            Evₖ[k] += aᵢ * (uₖ - Evₖ₍ₜ₋₁₎[k])
         end
     end
     return actions
@@ -281,7 +291,7 @@ for (pat, n) in zip(pats, n_subj)
             deck_payoffs[i, 1:n_results_j, j] = results_j
             deck_wl[i, 1:n_results_j, j] = Int.(results_j .< 0)
         end
-        payoff_schemes[i] = subj_data.scheme[1]
+        @inbounds payoff_schemes[i] = subj_data.scheme[1]
     end
     @info "Done."
     # if simulated
@@ -346,7 +356,7 @@ for (pat, n) in zip(pats, n_subj)
     # sampler = NUTS()
     # sampler = NUTS(500, 0.65; max_depth=10, adtype=AutoForwardDiff(; chunksize=0))
     @info "Sampling for $pat..."
-    sampler = NUTS(1000, 0.65; max_depth=10, adtype=adtype) 
+    sampler = NUTS(1000, 0.65; init_ϵ=0.05, max_depth=20, adtype=adtype) 
     chain = sample(
         model,
         sampler,
