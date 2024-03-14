@@ -7,9 +7,10 @@ include("src/LogCommon.jl")
 delete_existing_chains = true
 skip_existing_chains = true
 progress = true
-optim_param_est = false
-adtype = AutoReverseDiff(true)
+optim_param_est = true
+# adtype = AutoReverseDiff(true)
 # adtype = AutoZygote()
+adtype = AutoForwardDiff()
 
 Turing.setprogress!(progress)
 
@@ -93,18 +94,31 @@ function Distributions.ncategories(d::CategoricalLogit)
     return d.ncats
 end
 
+# attempting a performance optimized version (need to compare)
+function action_probabilities(x::AbstractVector{<:Real}, τ::Real)
+    Xᵢₙ = Array{Float64}(undef, 4)
+    Xₒᵤₜ = Array{Float64}(undef, 4)
+    Xₘₐₓ = ad_val(maximum(x))
+    ∑X::Float64 = 0.0
+    τ₀::Float64 = ad_val(τ)
+    @inbounds for i in 1:4
+        Xᵢₙ[i] = exp(ad_val(x[i] - Xₘₐₓ)*τ₀)
+        # ∑X += Xᵢₙ[i] # apparently julia's Base.sum is O(log(N)) vs this being O(N)
+    end
+    ∑X = sum(Xᵢₙ)
+    @inbounds for i in 1:4
+        Xₒᵤₜ[i] = Xᵢₙ[i] / ∑X
+    end
+    return Xₒᵤₜ
+end
+
+# original version
 # function action_probabilities(x::AbstractVector{<:Real}, τ::Real)
 #     xₘₐₓ = maximum(x)
 #     xₙ = x .- xₘₐₓ
-#     return exp.(xₙ * τ) / sum(exp.(xₙ * τ))
+#     xₙ = exp.(xₙ * τ)
+#     return xₙ / sum(xₙ)
 # end
-
-function action_probabilities(x::AbstractVector{<:Real}, τ::Real)
-    xₘₐₓ = maximum(x)
-    xₙ = x .- xₘₐₓ
-    xₙ = exp.(xₙ * τ)
-    return xₙ / sum(xₙ)
-end
 
 function logit_action_probabilities(x::AbstractVector{<:Real}, τ::Real)
     xₘₐₓ = maximum(x)
@@ -153,10 +167,10 @@ end
 
     # loop over subjects
     for i in 1:N
-        Aᵢ = A′[i] # Aᵢ = ϕ(A′ᵢ) -> achieved through logitnormal
-        aᵢ = a′[i] # aᵢ = ϕ(a′ᵢ) -> achieved through logitnormal
-        cᵢ = c′[i] # cᵢ = ϕ(c′ᵢ) * 5  -> achieved through truncated LogNormal
-        wᵢ = w′[i] # wᵢ = ϕ(w′ᵢ) * 5 -> achieved through truncated LogNormal
+        @inbounds Aᵢ = A′[i] # Aᵢ = ϕ(A′ᵢ) -> achieved through logitnormal
+        @inbounds aᵢ = a′[i] # aᵢ = ϕ(a′ᵢ) -> achieved through logitnormal
+        @inbounds cᵢ = c′[i] # cᵢ = ϕ(c′ᵢ) * 5  -> achieved through truncated LogNormal
+        @inbounds wᵢ = w′[i] # wᵢ = ϕ(w′ᵢ) * 5 -> achieved through truncated LogNormal
         # Set theta (exploration vs exploitation)
         θ = 3^cᵢ - 1
 
@@ -169,7 +183,8 @@ end
         deck_sequence_index = [1, 1, 1, 1]
 
         # loop over trials
-        for t in 2:(Tsubj[i])
+        @inbounds n_trials = Tsubj[i]
+        for t in 2:(n_trials)
             # Get previous expected values (all decks start at 0)
             # Evₖ₍ₜ₋₁₎ = Evₖ[t-1, :]
             Evₖ₍ₜ₋₁₎ = Evₖ
@@ -178,19 +193,19 @@ end
             Pₖ = action_probabilities(Evₖ₍ₜ₋₁₎, θ)
 
             # draw from categorical distribution based on softmax
-            actions[i, t-1] ~ Categorical(Pₖ)
+            @inbounds actions[i, t-1] ~ Categorical(Pₖ)
 
             # get selected deck: ad_val function avoids switching functions if using a different AD backend
-            k = ad_val(actions[i, t-1])
+            @inbounds k = ad_val(actions[i, t-1])
 
             # get payoff for selected deck
-            Xₜ = deck_payoffs[i, deck_sequence_index[k], k]
+            @inbounds Xₜ = deck_payoffs[i, deck_sequence_index[k], k]
             # println("Deck Payoff: ", Xₜ, ", Deck: ", k, ", Trial: ", t, ", Subject: ", i, ", Sequence Index: ", deck_sequence_index[k])
             # get win/loss status: loss = 1, win = 0
-            l = deck_wl[i, deck_sequence_index[k], k]
+            @inbounds l = deck_wl[i, deck_sequence_index[k], k]
 
             # increment deck sequence index (this is because each deck has a unique payoff sequence)
-            deck_sequence_index[k] += 1
+            @inbounds deck_sequence_index[k] += 1
 
             # get prospect utility -> same as paper but without having to use boolean logic: uₖ = (Xₜ >= 0) ? Xₜ^Aᵢ : -wᵢ * abs(Xₜ)^Aᵢ
             Xₜᴾ = abs(Xₜ)^Aᵢ
@@ -200,7 +215,7 @@ end
             # Evₖ[t, :] = Evₖ₍ₜ₋₁₎
 
             # delta learning rule
-            Evₖ[k] += aᵢ * (uₖ - Evₖ₍ₜ₋₁₎[k])
+            @inbounds Evₖ[k] += aᵢ * (uₖ - Evₖ₍ₜ₋₁₎[k])
         end
     end
     return actions
@@ -283,13 +298,13 @@ for (pat, n) in zip(pats, n_subj)
     @info "Loading subject wins, losses, and payoffs..."
     for (i, subj) in enumerate(subjs)
         subj_data = trial_data_pat[trial_data_pat.subj_uid .== subj, :]
-        choice[i, 1:Tsubj[i]] = subj_data.choice
+        @inbounds choice[i, 1:Tsubj[i]] = subj_data.choice
         for j in 1:4
             results_j = subj_data[subj_data.choice .== j, :outcome]
             n_results_j = length(results_j)
             # print("j:", j, " results_j: ", results_j, ", number of results: ", n_results_j, "\n")
-            deck_payoffs[i, 1:n_results_j, j] = results_j
-            deck_wl[i, 1:n_results_j, j] = Int.(results_j .< 0)
+            @inbounds deck_payoffs[i, 1:n_results_j, j] = results_j
+            @inbounds deck_wl[i, 1:n_results_j, j] = Int.(results_j .< 0)
         end
         @inbounds payoff_schemes[i] = subj_data.scheme[1]
     end
@@ -307,13 +322,13 @@ for (pat, n) in zip(pats, n_subj)
         @info "Using Optim to estimate initial parameters for $pat..."
         est_start = time()
         # mle_estimate = optimize(model, MLE(), LBFGS(); autodiff = :reverse)
-        mle_estimate = optimize(model, MLE(); autodiff = :reverse)
+        mle_estimate = optimize(model, MLE(), LBFGS(); autodiff = :reverse)
         est_time = time() - est_start
         @info "Estimation for $pat took $est_time seconds"
         if Optim.converged(mle_estimate.optim_result)
             @info "MLE estimate converged for $pat, using as initial parameters for sampling..."
-            @info mle_estimate.values.array
-            @info mle_estimate
+            # @info mle_estimate.values.array
+            # @info mle_estimate
             estimated_params = [repeat([mle_estimate.values.array], n_chains)...]
         else
             @warn "MLE estimate did not converge for $pat"
@@ -356,7 +371,9 @@ for (pat, n) in zip(pats, n_subj)
     # sampler = NUTS()
     # sampler = NUTS(500, 0.65; max_depth=10, adtype=AutoForwardDiff(; chunksize=0))
     @info "Sampling for $pat..."
-    sampler = NUTS(1000, 0.65; init_ϵ=0.05, max_depth=20, adtype=adtype) 
+    sampler = NUTS(; adtype=adtype) 
+    # start sampling but ignore warnings (for now...so many warnings about step size NaN, needs addressing)
+    #with_logger(surpress_warnings) do
     chain = sample(
         model,
         sampler,
@@ -364,10 +381,11 @@ for (pat, n) in zip(pats, n_subj)
         1_000,
         n_chains,
         progress=progress,
-        verbose=false;
+        verbose=true;
         save_state=false,
         initial_params=estimated_params,
     )
+    #end
     chains["pattern_$pat"] = chain
 
     # save chain
