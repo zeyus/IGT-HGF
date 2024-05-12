@@ -1,68 +1,77 @@
-using Plots
-using StatsPlots
-using StatsFuns
-using ArviZ
-using PSIS
-using ArviZPythonPlots
-using HDF5
-using MCMCChains
-using MCMCChainsStorage
-using Turing
-using ArviZPlots
+using HDF5, MCMCChains, MCMCChainsStorage, Turing
+using Plots, StatsPlots
+using ArviZ, PSIS, ArviZPlots, ArviZPythonPlots
 
+
+# patterns
+pats = Dict(
+    0 => "no_preference",
+    1 => "preference_AB",
+    2 => "preference_CD",
+    4 => "preference_BD",
+    5 => "preference_AB_BD",
+    6 => "preference_CD_BD",
+    8 => "preference_AC",
+    10 => "preference_AB_AC"
+)
+# patterns
+pats = Dict(
+    6 => "preference_CD_BD",
+
+)
 # Load data
-hgf_sim_chains = h5open("data/igt_data_95_chains.h5", "r") do file
-    read(file["Steingroever2011"], Chains)
+pvldelta_chains = Dict()
+h5open("data/igt_pvldelta_data_chains.h5", "r") do file
+    for pat in keys(pats)
+        g = open_group(file, "pattern_$pat")
+        pvldelta_chains[pat] = read(g, Chains)
+    end
 end
 
-plot_ppc(hgf_sim_chains)
-hgf_sim_chains
-# predict(hgf_sim_chains["Steingroever2011"], :u1, 1:100, 1:100)
-plot_posterior(hgf_sim_chains; var_names=[
-    "action_noise_group_mean",
-    "action_noise_group_sd",
-    "u_input_noise_group_mean",
-    "u_input_noise_group_sd",
-    "x_volatility_group_mean",
-    "x_volatility_group_sd",
-    ])
-gcf()
-
-plot_rank(hgf_sim_chains; var_names=[
-    "action_noise_group_mean",
-    "action_noise_group_sd",
-    "u_input_noise_group_mean",
-    "u_input_noise_group_sd",
-    "x_volatility_group_mean",
-    "x_volatility_group_sd",
-    ])
-gcf()
-
-plot_violin(hgf_sim_chains; var_names=[
-    "action_noise_group_mean",
-    "action_noise_group_sd",
-    ])
-gcf()
-plot_violin(hgf_sim_chains; var_names=[
-    "u_input_noise_group_mean",
-    "u_input_noise_group_sd",
-    ])
-gcf()
-plot_violin(hgf_sim_chains; var_names=[
-    "x_volatility_group_mean",
-    "x_volatility_group_sd",
-    ])
-gcf()
+hgf_chains = Dict()
+h5open("data/igt_hgf_data_chains.h5", "r") do file
+    for pat in keys(pats)
+        g = open_group(file, "choice_pattern_$pat")
+        hgf_chains[pat] = read(g, Chains)
+    end
+end
 
 
-plot_ess(hgf_sim_chains; var_names=[
-    "x_volatility_group_mean",
-    "x_volatility_group_sd",
-    ], kind="evolution")
-gcf()
+# print parameters from each model (we only need a single chain and pattern)
+for pat in keys(pats)
+    println("Pattern: $(pats[pat])")
+    println("PVL Delta")
+    println(names(pvldelta_chains[pat]))
+    println("HGF")
+    println(names(hgf_chains[pat]))
+    break
+end
+
+# for pvl delta, we want to compare the group level differences
+# :w′μ, :w′σ, :c'μ, :c'σ, :a'μ, :a'σ, :A'μ, :A'σ, 
+pvldelta_selected_params_sym::Vector{Symbol} = [
+    Symbol("w′μ"),
+    Symbol("w′σ"),
+    Symbol("c′μ"),
+    Symbol("c′σ"),
+    Symbol("a′μ"),
+    Symbol("a′σ"),
+    Symbol("A′μ"),
+    Symbol("A′σ"),
+]
 
 
-plot_density(hgf_sim_chains)
-gcf()
 
-distplot!(hgf_sim_chains; fill=true, alpha=0.5, var_names=["action_noise_group_mean"], groupname=:prior, label="prior")
+
+# Plotting
+for pat in keys(pats)
+    # PVL Delta
+    c = pvldelta_chains[pat][:, pvldelta_selected_params_sym, :]
+    StatsPlots.plot(c, legend=false, size=(1200, 1600))
+    Plots.savefig("figures/igt_pvldelta_$(replace(pats[pat], " " => "_")).png")
+    # break
+    # # HGF
+    # StatsPlots.plot(hgf_chains[pat], legend=false, size=(1200, 1600))
+    # Plots.savefig("figures/igt_hgf_$(replace(pats[pat], " " => "_")).png")
+    # break
+end

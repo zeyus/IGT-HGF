@@ -200,7 +200,6 @@ end
 
             # get payoff for selected deck
             @inbounds Xₜ = deck_payoffs[i, deck_sequence_index[k], k]
-            # println("Deck Payoff: ", Xₜ, ", Deck: ", k, ", Trial: ", t, ", Subject: ", i, ", Sequence Index: ", deck_sequence_index[k])
             # get win/loss status: loss = 1, win = 0
             @inbounds l = deck_wl[i, deck_sequence_index[k], k]
 
@@ -216,11 +215,18 @@ end
 
             # delta learning rule
             @inbounds Evₖ[k] += aᵢ * (uₖ - Evₖ₍ₜ₋₁₎[k])
+            
+            # add log likelihood
+            @inbounds Turing.addlogprob!(logpdf(Normal(Evₖ₍ₜ₋₁₎[k], 1), Evₖ[k]))
         end
     end
     return actions
 end
 
+
+function anyMissingNaNInf(x)
+    return any(ismissing, x) || any(isnan, x) || any(isinf, x)
+end
 
 
 ##############################################
@@ -231,6 +237,18 @@ end
 # let's try with real data
 @info "Loading Data..."
 trial_data = load_trial_data("./data/IGTdataSteingroever2014/IGTdata.rdata")
+
+############ IMPORTANT ################
+# Some experiments will be truncated, it's important to note this
+# but it should not be a problem for the model
+# this is just to test if the NaNs, missing are introduced
+# due to different lengths
+# but it does not seem so....uggghhhhh
+####################################
+
+# kill all trials above 95 to avoid missing values (breaks model)
+# @info "Removing trials above index 95..."
+trial_data = trial_data[trial_data.trial_idx .<= 95, :]
 # add a "choice pattern" column
 # 1 = CD >= 0.65, 2 = AB >= 0.65, 4 = BD >= 0.65, 8 = AC >= 0.65
 @info "Segmenting Data..."
@@ -272,7 +290,7 @@ elseif skip_existing_chains && isfile(chain_out_file)
         # pats = setdiff(pats, processed_patterns)
     end
 end
-# print out
+
 chains::Dict{String, Chains} = Dict()
 # priors_chain = nothing
 # priors_chain_df = nothing
@@ -302,16 +320,49 @@ for (pat, n) in zip(pats, n_subj)
         for j in 1:4
             results_j = subj_data[subj_data.choice .== j, :outcome]
             n_results_j = length(results_j)
+            
             # print("j:", j, " results_j: ", results_j, ", number of results: ", n_results_j, "\n")
             @inbounds deck_payoffs[i, 1:n_results_j, j] = results_j
+            # if anyMissingNaNInf(deck_payoffs[i, :, j])
+            #     @warn "Results for deck $j, $subj have missing, NaN, or Inf values for pattern $pat, skipping..."
+            #     print(deck_payoffs[i, :, j])
+            #     print(subj_data)
+            #     print(results_j)
+            #     exit()
+            # end
             @inbounds deck_wl[i, 1:n_results_j, j] = Int.(results_j .< 0)
         end
         @inbounds payoff_schemes[i] = subj_data.scheme[1]
     end
+
     @info "Done."
     # if simulated
     # deck_payoffs = construct_payoff_matrix_of_length(N, Tsubj, payoff_schemes)
     @info "Loading model for pattern $pat..."
+    # check if any values in any of the parameters we send to the model are missing, NA, NaN, etc
+    # # choice
+    # if anyMissingNaNInf(choice)
+    #     @warn "Choice matrix has missing, NaN, or Inf values for pattern $pat, skipping..."
+    #     print(choice)
+    # end
+    # # deck_payoffs
+    # if anyMissingNaNInf(deck_payoffs)
+    #     @warn "Deck payoffs matrix has missing, NaN, or Inf values for pattern $pat, skipping..."
+    #     print(deck_payoffs)
+    # end
+    # # deck_wl
+    # if anyMissingNaNInf(deck_wl)
+    #     @warn "Deck win/loss matrix has missing, NaN, or Inf values for pattern $pat, skipping..."
+    # end
+    # # Tsubj
+    # if anyMissingNaNInf(Tsubj)
+    #     @warn "Tsubj has missing, NaN, or Inf values for pattern $pat, skipping..."
+    # end
+    # continue
+
+
+
+
     model = pvl_delta(choice; N=N, Tsubj=Tsubj, deck_payoffs=deck_payoffs, deck_wl=deck_wl)
 
     # generate MAP estimate
