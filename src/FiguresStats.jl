@@ -16,9 +16,13 @@ pats = Dict(
 )
 # patterns
 pats = Dict(
+    0 => "no_preference",
     6 => "preference_CD_BD",
-
+    2 => "preference_CD",
+    4 => "preference_BD",
+    5 => "preference_AB_BD",
 )
+
 # Load data
 pvldelta_chains = Dict()
 h5open("data/igt_pvldelta_data_chains.h5", "r") do file
@@ -60,7 +64,13 @@ pvldelta_selected_params_sym::Vector{Symbol} = [
     Symbol("A′σ"),
 ]
 
+pvldelta_selected_params_sym::Vector{Symbol} = [
+    Symbol("w′μ"),
+    Symbol("w′σ"),
+]
 
+names(pvldelta_chains[6][:, pvldelta_selected_params_sym, :])
+plot(pvldelta_chains[6][:, :lp, :])
 
 
 # Plotting

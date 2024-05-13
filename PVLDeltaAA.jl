@@ -1,16 +1,31 @@
+# using CUDA
 using ForwardDiff, Zygote, ReverseDiff, Distributions, FillArrays, Optim, Turing, StatsFuns
 using HDF5, MCMCChains, MCMCChainsStorage
 using Turing: AutoForwardDiff, ForwardDiff, AutoReverseDiff, AutoZygote
 
+
 include("src/Data.jl")
 include("src/LogCommon.jl")
-delete_existing_chains = true
+
+delete_existing_chains = false
 skip_existing_chains = true
+
+# not implemented
+use_gpu = false
+
+# show progress bar
 progress = true
+
+# use Optim to estimate starting parameter values
 optim_param_est = true
-# adtype = AutoReverseDiff(true)
-# adtype = AutoZygote()
-adtype = AutoForwardDiff()
+optim_est_type = :mle  # :mle or :map
+
+# set AD backend
+adtype = AutoReverseDiff(true)
+
+# number of chains to run
+n_chains = 1
+
 
 Turing.setprogress!(progress)
 
@@ -95,19 +110,19 @@ function Distributions.ncategories(d::CategoricalLogit)
 end
 
 # attempting a performance optimized version (need to compare)
-function action_probabilities(x::AbstractVector{<:Real}, τ::Real)
-    Xᵢₙ = Array{Float64}(undef, 4)
-    Xₒᵤₜ = Array{Float64}(undef, 4)
+function action_probabilities(x::AbstractVector{<:Real}, τ::Real, N::Int = 4)
+    Xᵢₙ = Array{Float64}(undef, N)
+    Xₒᵤₜ = Array{Float64}(undef, N)
     Xₘₐₓ = ad_val(maximum(x))
     ∑X::Float64 = 0.0
     τ₀::Float64 = ad_val(τ)
-    @inbounds for i in 1:4
-        Xᵢₙ[i] = exp(ad_val(x[i] - Xₘₐₓ)*τ₀)
+    for i in 1:N
+        @inbounds Xᵢₙ[i] = exp(ad_val(x[i] - Xₘₐₓ)*τ₀)
         # ∑X += Xᵢₙ[i] # apparently julia's Base.sum is O(log(N)) vs this being O(N)
     end
     ∑X = sum(Xᵢₙ)
-    @inbounds for i in 1:4
-        Xₒᵤₜ[i] = Xᵢₙ[i] / ∑X
+    for i in 1:N
+        @inbounds Xₒᵤₜ[i] = Xᵢₙ[i] / ∑X
     end
     return Xₒᵤₜ
 end
@@ -129,26 +144,27 @@ end
 
 @info "Defining Model..."
 @model function pvl_delta(actions::Matrix{Union{Missing, Int}}, ::Type{T} = Float64; N::Int, Tsubj::Vector{Int}, deck_payoffs::Array{Float64, 3}, deck_wl::Array{Int, 3}) where {T}
+    min_pos_float = eps(0.0)
     # Group Level Parameters
     # Group level Shape mean
     A′μ ~ Normal(0, 1)
     # Group level Shape standard deviation
-    A′σ ~ Uniform(0, 1.5)
+    A′σ ~ Uniform(min_pos_float, 1.5)
 
     # Group level updating parameter mean
     a′μ ~ Normal(0, 1)
     # Group level updating parameter standard deviation
-    a′σ ~ Uniform(0, 1.5)
+    a′σ ~ Uniform(min_pos_float, 1.5)
 
     # Group level response consistency mean
     c′μ ~ Normal(0, 1)
     # Group level response consistency standard deviation
-    c′σ ~ Uniform(0, 1.5)
+    c′σ ~ Uniform(min_pos_float, 1.5)
 
     # Group Level Loss-Aversion mean
     w′μ ~ Normal(0, 1)
     # Group Level Loss-Aversion standard deviation
-    w′σ ~ Uniform(0, 1.5)
+    w′σ ~ Uniform(min_pos_float, 1.5)
 
     # individual parameters
     # Shape
@@ -167,16 +183,19 @@ end
 
     # loop over subjects
     for i in 1:N
+        # Shape
         @inbounds Aᵢ = A′[i] # Aᵢ = ϕ(A′ᵢ) -> achieved through logitnormal
+        # Updating parameter
         @inbounds aᵢ = a′[i] # aᵢ = ϕ(a′ᵢ) -> achieved through logitnormal
+        # Response consistency
         @inbounds cᵢ = c′[i] # cᵢ = ϕ(c′ᵢ) * 5  -> achieved through truncated LogNormal
+        # Loss-Aversion
         @inbounds wᵢ = w′[i] # wᵢ = ϕ(w′ᵢ) * 5 -> achieved through truncated LogNormal
+
         # Set theta (exploration vs exploitation)
         θ = 3^cᵢ - 1
 
-        # Create expected value matrix
-        # Evₖ = zeros(T, Tsubj[i], 4)
-        # This can be a vector, and we just update the deck.
+        # Expected value, this can be a vector, and we just update the deck.
         Evₖ = zeros(T, 4)
         
         # start each deck at the first card
@@ -216,11 +235,11 @@ end
             # delta learning rule
             @inbounds Evₖ[k] += aᵢ * (uₖ - Evₖ₍ₜ₋₁₎[k])
             
-            # add log likelihood
-            @inbounds Turing.addlogprob!(logpdf(Normal(Evₖ₍ₜ₋₁₎[k], 1), Evₖ[k]))
+            # add log likelihood for the choice
+            Turing.@addlogprob! loglikelihood(Categorical(Pₖ), actions[i, t-1])
         end
     end
-    return actions
+    return (actions, )
 end
 
 
@@ -247,7 +266,8 @@ trial_data = load_trial_data("./data/IGTdataSteingroever2014/IGTdata.rdata")
 ####################################
 
 # kill all trials above 95 to avoid missing values (breaks model)
-# @info "Removing trials above index 95..."
+@warn "This model is truncating trials above 95..."
+@warn "REMOVE AFTER DEBUGGING"
 trial_data = trial_data[trial_data.trial_idx .<= 95, :]
 # add a "choice pattern" column
 # 1 = CD >= 0.65, 2 = AB >= 0.65, 4 = BD >= 0.65, 8 = AC >= 0.65
@@ -258,9 +278,6 @@ trial_data.choice_pattern_bd = ifelse.(trial_data.bd_ratio .>= 0.65, 4, 0)
 trial_data.choice_pattern_ac = ifelse.(trial_data.ac_ratio .>= 0.65, 8, 0)
 
 trial_data.choice_pattern = trial_data.choice_pattern_ab .| trial_data.choice_pattern_cd .| trial_data.choice_pattern_bd .| trial_data.choice_pattern_ac
-# just one subject to test
-# trial_data = trial_data[trial_data.subj .== 1, :]
-# trial_data = trial_data[trial_data.study .== "Steingroever2011", :]
 
 # patterns
 pats = unique(trial_data.choice_pattern)
@@ -285,18 +302,19 @@ if delete_existing_chains && isfile(chain_out_file)
 elseif skip_existing_chains && isfile(chain_out_file)
     @info "Chain file already exists, finding processed patterns..."
     # get patterns that have already been processed
-    h5open(chain_out_file, "r") do file
-        processed_patterns = keys(file)
+    processed_patterns = h5open(chain_out_file, "r") do file
+        pats = keys(file)
         # pats = setdiff(pats, processed_patterns)
+        @info pats
+        return pats
     end
 end
 
 chains::Dict{String, Chains} = Dict()
-# priors_chain = nothing
-# priors_chain_df = nothing
 for (pat, n) in zip(pats, n_subj)
+    pat_id = "pattern_$pat"
     @info "Pattern: $pat, n = $n"
-    if "pattern_$pat" in processed_patterns
+    if pat_id in processed_patterns
         @info "Pattern $pat already processed, skipping..."
         continue
     end
@@ -320,111 +338,38 @@ for (pat, n) in zip(pats, n_subj)
         for j in 1:4
             results_j = subj_data[subj_data.choice .== j, :outcome]
             n_results_j = length(results_j)
-            
-            # print("j:", j, " results_j: ", results_j, ", number of results: ", n_results_j, "\n")
             @inbounds deck_payoffs[i, 1:n_results_j, j] = results_j
-            # if anyMissingNaNInf(deck_payoffs[i, :, j])
-            #     @warn "Results for deck $j, $subj have missing, NaN, or Inf values for pattern $pat, skipping..."
-            #     print(deck_payoffs[i, :, j])
-            #     print(subj_data)
-            #     print(results_j)
-            #     exit()
-            # end
             @inbounds deck_wl[i, 1:n_results_j, j] = Int.(results_j .< 0)
         end
         @inbounds payoff_schemes[i] = subj_data.scheme[1]
     end
 
     @info "Done."
-    # if simulated
-    # deck_payoffs = construct_payoff_matrix_of_length(N, Tsubj, payoff_schemes)
-    @info "Loading model for pattern $pat..."
-    # check if any values in any of the parameters we send to the model are missing, NA, NaN, etc
-    # # choice
-    # if anyMissingNaNInf(choice)
-    #     @warn "Choice matrix has missing, NaN, or Inf values for pattern $pat, skipping..."
-    #     print(choice)
-    # end
-    # # deck_payoffs
-    # if anyMissingNaNInf(deck_payoffs)
-    #     @warn "Deck payoffs matrix has missing, NaN, or Inf values for pattern $pat, skipping..."
-    #     print(deck_payoffs)
-    # end
-    # # deck_wl
-    # if anyMissingNaNInf(deck_wl)
-    #     @warn "Deck win/loss matrix has missing, NaN, or Inf values for pattern $pat, skipping..."
-    # end
-    # # Tsubj
-    # if anyMissingNaNInf(Tsubj)
-    #     @warn "Tsubj has missing, NaN, or Inf values for pattern $pat, skipping..."
-    # end
-    # continue
-
-
-
-
+    @info "Creating model for pattern $pat..."
     model = pvl_delta(choice; N=N, Tsubj=Tsubj, deck_payoffs=deck_payoffs, deck_wl=deck_wl)
-
-    # generate MAP estimate
-    n_chains = 3
-    estimated_params = nothing
     
+
+    # estimate initial parameters
+    estimated_params = nothing
     if optim_param_est
         @info "Using Optim to estimate initial parameters for $pat..."
         est_start = time()
-        # mle_estimate = optimize(model, MLE(), LBFGS(); autodiff = :reverse)
-        mle_estimate = optimize(model, MLE(), LBFGS(); autodiff = :reverse)
+        optim_est_type == :map ? est_method = MAP() : est_method = MLE()
+        optim_estimate = optimize(model, est_method, LBFGS(); autodiff = :reverse)
         est_time = time() - est_start
         @info "Estimation for $pat took $est_time seconds"
-        if Optim.converged(mle_estimate.optim_result)
-            @info "MLE estimate converged for $pat, using as initial parameters for sampling..."
-            # @info mle_estimate.values.array
-            # @info mle_estimate
-            estimated_params = [repeat([mle_estimate.values.array], n_chains)...]
+        if Optim.converged(optim_estimate.optim_result)
+            @info "$optim_est_type estimate converged for $pat, using as initial parameters for sampling..."
+            estimated_params = collect(Iterators.repeated(optim_estimate.values.array, n_chains))
         else
-            @warn "MLE estimate did not converge for $pat"
+            @warn "$optim_est_type estimate did not converge for $pat"
         end
     else
         @warn "Not using Optim to estimate initial parameters for $pat..."
-        # param_dict = Dict(
-        #     "A′μ" => 0.0,
-        #     "A′σ" => 1.0,
-        #     "a′μ" => 0.0,
-        #     "a′σ" => 1.0,
-        #     "c′μ" => 0.0,
-        #     "c′σ" => 1.0,
-        #     "w′μ" => 0.0,
-        #     "w′σ" => 1.0,
-        #     # "A′" => fill(0.0, N),
-        #     # "a′" => fill(0.0, N),
-        #     # "c′" => fill(0.0, N),
-        #     # "w′" => fill(0.0, N)
-        # )
-        # # we need to add params for each subject + 1 (e.g. A′[1], ..., A′[N + 1])
-        # for i in 1:N
-        #     param_dict["A′[$i]"] = 0.5
-        #     param_dict["a′[$i]"] = 0.5
-        #     param_dict["c′[$i]"] = 0.5
-        #     param_dict["w′[$i]"] = 0.5
-        # end
-        # estimated_params =repeat([
-        #     param_dict
-        # ], n_chains)
     end
 
-    # get one from priors out
-    # priors_chain = sample(model, Prior(), 1_000, progress=progress, verbose=false)
-    # println(priors_chain)
-    # priors_chain_df = DataFrame(priors_chain)
-    # print(summary(priors_chain_df))
-    # break
-    # defaults: -1: uses max(n_samples/2, 500) ?!?, 0.65: target acceptance rate; Adtype is set to ForwardDiff by default
-    # sampler = NUTS()
-    # sampler = NUTS(500, 0.65; max_depth=10, adtype=AutoForwardDiff(; chunksize=0))
     @info "Sampling for $pat..."
-    sampler = NUTS(; adtype=adtype) 
-    # start sampling but ignore warnings (for now...so many warnings about step size NaN, needs addressing)
-    #with_logger(surpress_warnings) do
+    sampler = NUTS(1000, 0.40; adtype=adtype) 
     chain = sample(
         model,
         sampler,
@@ -436,17 +381,14 @@ for (pat, n) in zip(pats, n_subj)
         save_state=false,
         initial_params=estimated_params,
     )
-    #end
-    chains["pattern_$pat"] = chain
+    chains[pat_id] = chain
 
     # save chain
     @info "Saving chain for $pat..."
-    pattern_name = "pattern_$pat"
     h5open(chain_out_file, "cw") do file
-        g = create_group(file, pattern_name)
+        g = create_group(file, pat_id)
         write(g, chain)
     end
     @info "Done with pattern $pat."
 end
-
 @info "Done."
