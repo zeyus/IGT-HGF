@@ -1,7 +1,11 @@
 # using CUDA
+using Distributed
+using Base.Threads: @threads
+using Base: RefValue
 using ForwardDiff, Zygote, ReverseDiff, Distributions, FillArrays, Optim, Turing, StatsFuns
-using HDF5, MCMCChains, MCMCChainsStorage
+using Feather, HDF5, MCMCChains, MCMCChainsStorage, DataFrames
 using Turing: AutoForwardDiff, ForwardDiff, AutoReverseDiff, AutoZygote
+
 
 
 include("src/Data.jl")
@@ -10,21 +14,18 @@ include("src/LogCommon.jl")
 delete_existing_chains = false
 skip_existing_chains = true
 
-# not implemented
-use_gpu = false
-
 # show progress bar
 progress = true
 
 # use Optim to estimate starting parameter values
 optim_param_est = true
-optim_est_type = :mle  # :mle or :map
+optim_est_type = :map  # :mle or :map
 
 # set AD backend
 adtype = AutoReverseDiff(true)
 
 # number of chains to run
-n_chains = 1
+n_chains = 3
 
 
 Turing.setprogress!(progress)
@@ -40,7 +41,19 @@ function ad_val(x::ForwardDiff.Dual)
     return ForwardDiff.value(x)
 end
 
-function ad_val(x::Real)
+function ad_val(x::T) where {T <: Real}
+    return x
+end
+function ad_val(x::AbstractArray{ForwardDiff.Dual{T, V, N}}) where {T, V, N}
+    return ForwardDiff.value.(x)
+end
+function ad_val(x::AbstractArray{ReverseDiff.TrackedReal{V, D, O}}) where {V, D, O}
+    return ReverseDiff.value.(x)
+end
+function ad_val(x::AbstractArray{ReverseDiff.TrackedArray})
+    return ReverseDiff.value.(x)
+end
+function ad_val(x::AbstractArray{T}) where {T <: AbstractFloat}
     return x
 end
 
@@ -109,23 +122,56 @@ function Distributions.ncategories(d::CategoricalLogit)
     return d.ncats
 end
 
+
+# Helper function to calculate the inverse logit
+function inv_logit(x::T) where T
+    return 1 / (1 + exp(-x))
+end
+
+# Define the Phi_approx function
+function Φₐₚₚᵣₒₓ(x)
+    av_squared = x * x
+    inv_logit(0.07056 * x * av_squared + 1.5976 * x)
+end
+
+# Define the custom adjoint for phi_approx
+ReverseDiff.@forward function Φₐₚₚᵣₒₓ(x)
+    av_squared = x * x
+    f = inv_logit(0.07056 * x * av_squared + 1.5976 * x)
+    da = f * (1 - f) * (3.0 * 0.07056 * av_squared + 1.5976)
+    return f, (outgrad) -> outgrad * da
+end
+
 # attempting a performance optimized version (need to compare)
-function action_probabilities(x::AbstractVector{<:Real}, τ::Real, N::Int = 4)
-    Xᵢₙ = Array{Float64}(undef, N)
-    Xₒᵤₜ = Array{Float64}(undef, N)
-    Xₘₐₓ = ad_val(maximum(x))
-    ∑X::Float64 = 0.0
-    τ₀::Float64 = ad_val(τ)
-    for i in 1:N
-        @inbounds Xᵢₙ[i] = exp(ad_val(x[i] - Xₘₐₓ)*τ₀)
-        # ∑X += Xᵢₙ[i] # apparently julia's Base.sum is O(log(N)) vs this being O(N)
-    end
-    ∑X = sum(Xᵢₙ)
-    for i in 1:N
-        @inbounds Xₒᵤₜ[i] = Xᵢₙ[i] / ∑X
-    end
+# function action_probabilities(x::AbstractVector{<:Real}, τ::Real, N::Int = 4)
+#     Xᵢₙ = Array{Float64}(undef, N)
+#     Xₒᵤₜ = Array{Float64}(undef, N)
+#     Xₘₐₓ = ad_val(maximum(x))
+#     ∑X::Float64 = 0.0
+#     τ₀::Float64 = ad_val(τ)
+#     for i in 1:N
+#         @inbounds Xᵢₙ[i] = exp(ad_val(x[i] - Xₘₐₓ)*τ₀)
+#         # ∑X += Xᵢₙ[i] # apparently julia's Base.sum is O(log(N)) vs this being O(N)
+#     end
+#     ∑X = sum(Xᵢₙ)
+#     for i in 1:N
+#         @inbounds Xₒᵤₜ[i] = Xᵢₙ[i] / ∑X
+#     end
+#     return Xₒᵤₜ
+# end
+function action_probabilities!(Xᵢₙ::Vector{Float64}, Xₒᵤₜ::Vector{Float64}, x::AbstractArray{T}, θ::P) where {T <: Real, P <: Real}
+    Xᵢₙ .= exp.((x .- maximum(x)) * θ)
+    Xₒᵤₜ .= Xᵢₙ / sum(Xᵢₙ)
+end
+
+function action_probabilities(x::AbstractArray{T}, θ::P, N::Int = 4) where {T <: Real, P <: Real}
+    Xᵢₙ = Vector{Float64}(undef, N)
+    Xₒᵤₜ = Vector{Float64}(undef, N)
+    action_probabilities!(Xᵢₙ, Xₒᵤₜ, ad_val(x), ad_val(θ))
     return Xₒᵤₜ
 end
+
+# action_probabilities(x::SubArray, θ::T, N::Int = 4) where {T <: Real} = action_probabilities(x[], θ, N)
 
 # original version
 # function action_probabilities(x::AbstractVector{<:Real}, τ::Real)
@@ -166,50 +212,48 @@ end
     # Group Level Loss-Aversion standard deviation
     w′σ ~ Uniform(min_pos_float, 1.5)
 
-    # individual parameters
     # Shape
-    A′ ~ filldist(LogitNormal(A′μ, A′σ), N)
+    A′_pr ~ filldist(Normal(0, 1), N)
     # Updating parameter
-    a′ ~ filldist(LogitNormal(a′μ, a′σ), N)
+    a′_pr ~ filldist(Normal(0, 1), N)
     # Response consistency
-    c′ ~ filldist(truncated(LogNormal(c′μ, c′σ); upper=5), N)
+    c′_pr ~ filldist(Normal(0, 1), N)
     # Loss-Aversion
-    w′ ~ filldist(truncated(LogNormal(w′μ, w′σ); upper=5), N)
+    w′_pr ~ filldist(Normal(0, 1), N)
+
+
+    # vectorized version of the loop for setting subject-level params
+    A′ = Φₐₚₚᵣₒₓ.(A′μ .+ A′σ .* A′_pr)
+    a′ = Φₐₚₚᵣₒₓ.(a′μ .+ a′σ .* a′_pr) .* 2
+    c′ = Φₐₚₚᵣₒₓ.(c′μ .+ c′σ .* c′_pr) .* 5
+    w′ = Φₐₚₚᵣₒₓ.(w′μ .+ w′σ .* w′_pr) .* 10
+    θ = 3 .^ c′ .- 1
+
+    max_trials = maximum(Tsubj)
 
     # create actions matrix if using the model for simulation
     if actions === missing
-        actions = Matrix{Union{Missing, Int}}(undef, N, maximum(Tsubj))
+        actions = Matrix{Union{Missing, Int}}(undef, N, max_trials)
     end
-
+    # Set up expected values and deck sequence index
+    Evₖ = zeros(T, max_trials, 4, N)
+    deck_sequence_index = ones(Int, N, 4)
+    # print type of Evₖ
+    # @info typeof(Evₖ)
+    # print shape of actions
+    # @info size(actions)
+    # print maximum(Tsubj)
+    # @info max_trials
     # loop over subjects
     for i in 1:N
-        # Shape
-        @inbounds Aᵢ = A′[i] # Aᵢ = ϕ(A′ᵢ) -> achieved through logitnormal
-        # Updating parameter
-        @inbounds aᵢ = a′[i] # aᵢ = ϕ(a′ᵢ) -> achieved through logitnormal
-        # Response consistency
-        @inbounds cᵢ = c′[i] # cᵢ = ϕ(c′ᵢ) * 5  -> achieved through truncated LogNormal
-        # Loss-Aversion
-        @inbounds wᵢ = w′[i] # wᵢ = ϕ(w′ᵢ) * 5 -> achieved through truncated LogNormal
-
-        # Set theta (exploration vs exploitation)
-        θ = 3^cᵢ - 1
-
-        # Expected value, this can be a vector, and we just update the deck.
-        Evₖ = zeros(T, 4)
-        
-        # start each deck at the first card
-        deck_sequence_index = [1, 1, 1, 1]
-
         # loop over trials
         @inbounds n_trials = Tsubj[i]
-        for t in 2:(n_trials)
+        for t in 2:n_trials
             # Get previous expected values (all decks start at 0)
-            # Evₖ₍ₜ₋₁₎ = Evₖ[t-1, :]
-            Evₖ₍ₜ₋₁₎ = Evₖ
+            Evₖ₍ₜ₋₁₎ = Evₖ[t-1, :, i]
 
             # softmax choice
-            Pₖ = action_probabilities(Evₖ₍ₜ₋₁₎, θ)
+            Pₖ = action_probabilities(Evₖ₍ₜ₋₁₎, θ[i])
 
             # draw from categorical distribution based on softmax
             @inbounds actions[i, t-1] ~ Categorical(Pₖ)
@@ -218,25 +262,21 @@ end
             @inbounds k = ad_val(actions[i, t-1])
 
             # get payoff for selected deck
-            @inbounds Xₜ = deck_payoffs[i, deck_sequence_index[k], k]
+            @inbounds Xₜ = deck_payoffs[i, deck_sequence_index[i, k], k]
             # get win/loss status: loss = 1, win = 0
-            @inbounds l = deck_wl[i, deck_sequence_index[k], k]
+            @inbounds l = deck_wl[i, deck_sequence_index[i, k], k]
 
             # increment deck sequence index (this is because each deck has a unique payoff sequence)
-            @inbounds deck_sequence_index[k] += 1
+            @inbounds deck_sequence_index[i, k] += 1
 
             # get prospect utility -> same as paper but without having to use boolean logic: uₖ = (Xₜ >= 0) ? Xₜ^Aᵢ : -wᵢ * abs(Xₜ)^Aᵢ
-            Xₜᴾ = abs(Xₜ)^Aᵢ
-            uₖ = (l * -wᵢ * Xₜᴾ) + ((1 - l) * Xₜᴾ)
-
-            # update expected value of selected deck, carry forward the rest
-            # Evₖ[t, :] = Evₖ₍ₜ₋₁₎
+            Xₜᴾ = abs(Xₜ)^A′[i]
+            uₖ = (l * -w′[i] * Xₜᴾ) + ((1 - l) * Xₜᴾ)
 
             # delta learning rule
-            @inbounds Evₖ[k] += aᵢ * (uₖ - Evₖ₍ₜ₋₁₎[k])
-            
-            # add log likelihood for the choice
-            Turing.@addlogprob! loglikelihood(Categorical(Pₖ), actions[i, t-1])
+            @inbounds Evₖ[t, :, i] .= Evₖ₍ₜ₋₁₎
+            @inbounds Evₖ[t, k, i] += a′[i] * (uₖ - Evₖ₍ₜ₋₁₎[k])
+            @inbounds Turing.@addlogprob! loglikelihood(Categorical(Pₖ), actions[i, t-1])
         end
     end
     return (actions, )
@@ -255,35 +295,60 @@ end
 
 # let's try with real data
 @info "Loading Data..."
-trial_data = load_trial_data("./data/IGTdataSteingroever2014/IGTdata.rdata")
+trial_data::DataFrame = DataFrame()
+pats::Vector{Int} = Vector{Int}(undef, 0)
+n_subj::Vector{Int} = Vector{Int}(undef, 0)
 
-############ IMPORTANT ################
-# Some experiments will be truncated, it's important to note this
-# but it should not be a problem for the model
-# this is just to test if the NaNs, missing are introduced
-# due to different lengths
-# but it does not seem so....uggghhhhh
-####################################
+cached_data_file = "./data/IGTdataSteingroever2014/IGTdata.feather"
+cached_metadata_file = "./data/IGTdataSteingroever2014/IGTMetadata.h5"
+if isfile(cached_data_file)
+    @info "Loading cached data..."
+    trial_data = Feather.read(cached_data_file)
+    pats, n_subj = h5open(cached_metadata_file, "r") do file
+        pats = read(file, "pats")
+        n_subj = read(file, "n_subj")
+        return pats, n_subj
+    end
+else
+    @info "Cached data not found, loading from RData..."
+    trial_data = load_trial_data("./data/IGTdataSteingroever2014/IGTdata.rdata")
 
-# kill all trials above 95 to avoid missing values (breaks model)
-@warn "This model is truncating trials above 95..."
-@warn "REMOVE AFTER DEBUGGING"
-trial_data = trial_data[trial_data.trial_idx .<= 95, :]
-# add a "choice pattern" column
-# 1 = CD >= 0.65, 2 = AB >= 0.65, 4 = BD >= 0.65, 8 = AC >= 0.65
-@info "Segmenting Data..."
-trial_data.choice_pattern_ab = ifelse.(trial_data.ab_ratio .>= 0.65, 1, 0)
-trial_data.choice_pattern_cd = ifelse.(trial_data.cd_ratio .>= 0.65, 2, 0)
-trial_data.choice_pattern_bd = ifelse.(trial_data.bd_ratio .>= 0.65, 4, 0)
-trial_data.choice_pattern_ac = ifelse.(trial_data.ac_ratio .>= 0.65, 8, 0)
+    ############ IMPORTANT ################
+    # Some experiments will be truncated, it's important to note this
+    # but it should not be a problem for the model
+    # this is just to test if the NaNs, missing are introduced
+    # due to different lengths
+    # but it does not seem so....uggghhhhh
+    ####################################
 
-trial_data.choice_pattern = trial_data.choice_pattern_ab .| trial_data.choice_pattern_cd .| trial_data.choice_pattern_bd .| trial_data.choice_pattern_ac
+    # kill all trials above 95 to avoid missing values (breaks model)
+    @warn "This model is truncating trials above 95..."
+    @warn "REMOVE AFTER DEBUGGING"
+    trial_data = trial_data[trial_data.trial_idx .<= 95, :]
+    # add a "choice pattern" column
+    # 1 = CD >= 0.65, 2 = AB >= 0.65, 4 = BD >= 0.65, 8 = AC >= 0.65
+    @info "Segmenting Data..."
+    trial_data.choice_pattern_ab = ifelse.(trial_data.ab_ratio .>= 0.65, 1, 0)
+    trial_data.choice_pattern_cd = ifelse.(trial_data.cd_ratio .>= 0.65, 2, 0)
+    trial_data.choice_pattern_bd = ifelse.(trial_data.bd_ratio .>= 0.65, 4, 0)
+    trial_data.choice_pattern_ac = ifelse.(trial_data.ac_ratio .>= 0.65, 8, 0)
 
-# patterns
-pats = unique(trial_data.choice_pattern)
+    trial_data.choice_pattern = trial_data.choice_pattern_ab .| trial_data.choice_pattern_cd .| trial_data.choice_pattern_bd .| trial_data.choice_pattern_ac
 
-# get number of unique subjects for each pattern
-n_subj = [length(unique(trial_data[trial_data.choice_pattern .== pat, :subj])) for pat in pats]
+    # patterns
+    pats = unique(trial_data.choice_pattern)
+
+    # get number of unique subjects for each pattern
+    n_subj = [length(unique(trial_data[trial_data.choice_pattern .== pat, :subj])) for pat in pats]
+
+    # save trial_data, pats and n_subj to file
+    @info "Saving data to cache file..."
+    Feather.write(cached_data_file, trial_data)
+    h5open(cached_metadata_file, "cw") do file
+        write(file, "pats", pats)
+        write(file, "n_subj", n_subj)
+    end
+end
 
 chain_out_file = "./data/igt_pvldelta_data_chains.h5"
 
@@ -369,12 +434,17 @@ for (pat, n) in zip(pats, n_subj)
     end
 
     @info "Sampling for $pat..."
-    sampler = NUTS(1000, 0.40; adtype=adtype) 
+    sampler = NUTS(
+        2500, # warmup samples
+        0.40; # target acceptance rate
+        max_depth=20, # max tree depth
+        init_ϵ=0.2, # initial step size
+        adtype=adtype) 
     chain = sample(
         model,
         sampler,
         MCMCThreads(), # disable for debugging
-        1_000,
+        5_000,
         n_chains,
         progress=progress,
         verbose=true;

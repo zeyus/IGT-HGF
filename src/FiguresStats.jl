@@ -16,11 +16,7 @@ pats = Dict(
 )
 # patterns
 pats = Dict(
-    0 => "no_preference",
     6 => "preference_CD_BD",
-    2 => "preference_CD",
-    4 => "preference_BD",
-    5 => "preference_AB_BD",
 )
 
 # Load data
@@ -69,8 +65,8 @@ pvldelta_selected_params_sym::Vector{Symbol} = [
     Symbol("w′σ"),
 ]
 
-names(pvldelta_chains[6][:, pvldelta_selected_params_sym, :])
-plot(pvldelta_chains[6][:, :lp, :])
+pvldelta_chains[6][:, pvldelta_selected_params_sym, :]
+names(pvldelta_chains[6])
 
 
 # Plotting
