@@ -2,7 +2,6 @@ using HDF5, MCMCChains, MCMCChainsStorage, Turing
 using Plots, StatsPlots
 using ArviZ, PSIS, ArviZPlots, ArviZPythonPlots
 
-
 # patterns
 pats = Dict(
     0 => "no_preference",
@@ -68,6 +67,7 @@ pvldelta_selected_params_sym::Vector{Symbol} = [
 pvldelta_chains[6][:, pvldelta_selected_params_sym, :]
 names(pvldelta_chains[6])
 
+Plots.plot(pvldelta_chains[6][:, pvldelta_selected_params_sym, :])
 
 # Plotting
 for pat in keys(pats)
