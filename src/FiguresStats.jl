@@ -1,6 +1,6 @@
 using HDF5, MCMCChains, MCMCChainsStorage, Turing
 using Plots, StatsPlots
-using ArviZ, PSIS, ArviZPlots, ArviZPythonPlots
+# using ArviZ, PSIS, ArviZPlots, ArviZPythonPlots
 
 # patterns
 pats = Dict(
@@ -49,19 +49,19 @@ end
 # for pvl delta, we want to compare the group level differences
 # :w′μ, :w′σ, :c'μ, :c'σ, :a'μ, :a'σ, :A'μ, :A'σ, 
 pvldelta_selected_params_sym::Vector{Symbol} = [
-    Symbol("w′μ"),
-    Symbol("w′σ"),
-    Symbol("c′μ"),
-    Symbol("c′σ"),
-    Symbol("a′μ"),
-    Symbol("a′σ"),
-    Symbol("A′μ"),
-    Symbol("A′σ"),
+    Symbol("wμ"),
+    Symbol("wσ"),
+    Symbol("cμ"),
+    Symbol("cσ"),
+    Symbol("aμ"),
+    Symbol("aσ"),
+    Symbol("Aμ"),
+    Symbol("Aσ"),
 ]
 
 pvldelta_selected_params_sym::Vector{Symbol} = [
-    Symbol("w′μ"),
-    Symbol("w′σ"),
+    Symbol("wμ"),
+    Symbol("wσ"),
 ]
 
 pvldelta_chains[6][:, pvldelta_selected_params_sym, :]
