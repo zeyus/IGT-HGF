@@ -27,6 +27,14 @@ h5open("data/igt_pvldelta_data_chains.h5", "r") do file
     end
 end
 
+pvldelta_chains = Dict()
+h5open("data/igt_pvldelta_data_chains_STAN.h5", "r") do file
+    for pat in keys(pats)
+        g = open_group(file, "pattern_$pat")
+        pvldelta_chains[pat] = read(g, Chains)
+    end
+end
+
 hgf_chains = Dict()
 h5open("data/igt_hgf_data_chains.h5", "r") do file
     for pat in keys(pats)

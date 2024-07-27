@@ -1,130 +1,148 @@
-# using CUDA
 using Distributed
-using Base.Threads: @threads
-using Base: RefValue
-using StatsFuns: normpdf
-using LogExpFunctions, Tapir, LinearAlgebra, ForwardDiff, Enzyme, Zygote, ReverseDiff, DistributionsAD, FillArrays, Optim, Turing #, StatsFuns
-using Feather, HDF5, MCMCChains, MCMCChainsStorage, DataFrames
-using Turing: AutoForwardDiff, ForwardDiff, AutoReverseDiff, AutoZygote, AutoTapir, AbstractMCMC.AbstractMCMCEnsemble
-using ADTypes: AutoEnzyme
 
+n_procs = 1
 
-include("src/Data.jl")
-include("src/LogCommon.jl")
-
-delete_existing_chains = false
-skip_existing_chains = true
-
-# show progress bar
-progress = true
-# verbose sampling output
-verbose = true
-
-# use Optim to estimate starting parameter values
-optim_param_est = false
-optim_est_type = :mle  # :mle or :map
-
-# if not using Optim, should we generate random starting parameters?
-rand_param_est = true
-parallel = true
-# number of chains to run
-n_chains = 3
-n_samples = 10_000
-
-local chain_handler::AbstractMCMCEnsemble
-if parallel
-    chain_handler = MCMCThreads()
-else
-    chain_handler = MCMCSerial()
+if n_procs > 1
+    addprocs(n_procs)
 end
-# set AD backend
-# @info "Using Enzyme as AD backend..."
-# adtype = AutoEnzyme()
-# @info "Using Tapir as AD backend..."
-# adtype = AutoTapir(; safe_mode=false)
-@info "Using ReverseDiff as AD backend..."
-adtype = AutoReverseDiff(; compile=true)
-# @info "Using Zygote as AD backend..."
-# adtype = AutoZygote()
-# @info "Using ForwardDiff as AD backend..."
-# adtype = AutoForwardDiff()
-# number of warmup samples
-n_warmup = 5_000
-# target acceptance rate
-target_accept = 0.65
-# max tree depth
-max_depth = 15
-# initial step size
-init_ϵ = 0.2 # if 0, turing will try to estimate it
-# max divergence during doubling
-# Δ_max = 
-# @info "Using NUTS Sampler with $n_warmup warmup samples, $target_accept target acceptance rate, $max_depth max tree depth, and $init_ϵ initial step size."
-sampler = NUTS(
-    n_warmup, # warmup samples
-    target_accept; # target acceptance rate
-    max_depth=max_depth, # max tree depth
-    init_ϵ=init_ϵ, # initial step size
-    adtype=adtype) 
-# # @info "Using HMCDA Sampler..."
-# sampler = HMCDA(
-#     n_warmup, # n adapt steps
-#     target_accept, # target acceptance rate
-#     0.3; # target leapfrog length
-#     adtype=adtype
-# )
-# @info "Using HMC Sampler..."
-# sampler = HMC(
-#     0.1, # step size
-#     10; # number of steps
-#     adtype=adtype
-# )
-# @info "Using Particle Gibbs Sampler...(NOT WORKING)"
-# sampler = PG(
-#     10
-# )
-# @info "Using MH sampler..."
-# sampler = MH()
-# @info "Using Gibbs sampler..."
-# sampler = Gibbs(
-#     HMC(0.1, 10,
-#     :Aμ,
-#     :Aσ,
-#     :aμ,
-#     :aσ,
-#     :cμ,
-#     :cσ,
-#     :wμ,
-#     :wσ,
-#     :A_pr,
-#     :a_pr,
-#     :c_pr,
-#     :w_pr
-#     ; adtype=adtype
-#     ),
-#     PG(10,
-#     :y
-#     )
-# )
+
+@everywhere begin
+    using Base.Threads: @threads
+    using Base: RefValue
+    using StatsFuns: normpdf
+    using LogExpFunctions, Tapir, LinearAlgebra, ForwardDiff, Enzyme, Zygote, ReverseDiff, DistributionsAD, FillArrays, Optim, Turing #, StatsFuns
+    using Feather, HDF5, MCMCChains, MCMCChainsStorage, DataFrames
+    using Turing: AutoForwardDiff, ForwardDiff, AutoReverseDiff, AutoZygote, AutoTapir, AbstractMCMC.AbstractMCMCEnsemble
+    using ADTypes: AutoEnzyme
 
 
 
+    include("src/Data.jl")
+    include("src/LogCommon.jl")
+
+    delete_existing_chains = false
+    skip_existing_chains = true
+
+    # show progress bar
+    progress = true
+    # verbose sampling output
+    verbose = true
+
+    parallel = true
+    threads = true
+
+    # use Optim to estimate starting parameter values
+    optim_param_est = false
+    optim_est_type = :mle  # :mle or :map
+
+    # if not using Optim, should we generate random starting parameters?
+    rand_param_est = true
+    # number of chains to run
+    n_chains = 3
+    n_samples = 3_000
+    thinning = 1 # thinning factor, not needed these days, in the paper they used 5
+    
+    global chain_handler::AbstractMCMCEnsemble
+    if parallel
+        if threads
+            @info "Running chains in parallel with threads..."
+            chain_handler = MCMCThreads()
+        else
+            @info "Running chains in parallel with seperate processes..."
+            
+            chain_handler = MCMCDistributed()
+        end
+    else
+        @info "Running chains serially..."
+        chain_handler = MCMCSerial()
+    end
+    # set AD backend
+    # @info "Using Enzyme as AD backend..."
+    # adtype = AutoEnzyme()
+    # @info "Using Tapir as AD backend..."
+    # adtype = AutoTapir(; safe_mode=false)
+    @info "Using ReverseDiff as AD backend..."
+    adtype = AutoReverseDiff(; compile=true)
+    # @info "Using Zygote as AD backend..."
+    # adtype = AutoZygote()
+    # @info "Using ForwardDiff as AD backend..."
+    # adtype = AutoForwardDiff()
+    # number of warmup samples
+    n_warmup = 1_500
+    # target acceptance rate
+    target_accept = 0.75
+    # max tree depth
+    max_depth = 20
+    # initial step size
+    init_ϵ = 0.05 # if 0, turing will try to estimate it
+    # max divergence during doubling
+    # Δ_max = 
+    # @info "Using NUTS Sampler with $n_warmup warmup samples, $target_accept target acceptance rate, $max_depth max tree depth, and $init_ϵ initial step size."
+    # sampler = NUTS(
+    #     n_warmup, # warmup samples
+    #     target_accept; # target acceptance rate
+    #     max_depth=max_depth, # max tree depth
+    #     init_ϵ=init_ϵ, # initial step size
+    #     adtype=adtype) 
+    # # @info "Using HMCDA Sampler..."
+    # sampler = HMCDA(
+    #     n_warmup, # n adapt steps
+    #     target_accept, # target acceptance rate
+    #     0.3; # target leapfrog length
+    #     adtype=adtype
+    # )
+    @info "Using HMC Sampler..."
+    sampler = HMC(
+        0.05, # step size
+        10; # number of steps
+        adtype=adtype
+    )
+    # @info "Using Particle Gibbs Sampler...(NOT WORKING)"
+    # sampler = PG(
+    #     10
+    # )
+    # @info "Using MH sampler..."
+    # sampler = MH()
+    # @info "Using Gibbs sampler..."
+    # sampler = Gibbs(
+    #     HMC(0.05, 10,
+    #     :Aμ,
+    #     :Aσ,
+    #     :aμ,
+    #     :aσ,
+    #     :cμ,
+    #     :cσ,
+    #     :wμ,
+    #     :wσ,
+    #     :A_pr,
+    #     :a_pr,
+    #     :c_pr,
+    #     :w_pr
+    #     ; adtype=adtype
+    #     ),
+    #     PG(10,
+    #     :actions
+    #     )
+    # )
+
+
+end
 @info "Sampling will use $n_chains chains with $n_samples samples each."
 
 
 Turing.setprogress!(progress)
 
-ad_val(x::T) where {T <: Real} = x
-ad_val(x::ForwardDiff.Dual{T, V, N}) where {T, V, N} = ForwardDiff.value(x)
-ad_val(x::ReverseDiff.TrackedReal{V, D, O}) where {V, D, O} = ReverseDiff.value(x)
+# ad_val(x::T) where {T <: Real} = x
+# ad_val(x::ForwardDiff.Dual{T, V, N}) where {T, V, N} = ForwardDiff.value(x)
+# ad_val(x::ReverseDiff.TrackedReal{V, D, O}) where {V, D, O} = ReverseDiff.value(x)
 
 
 @info "Defining Model..."
-@model function pvl_delta(actions::Matrix{Int}, N::Int, Tsubj::Vector{Int}, deck_payoffs::Array{Float64, 2}, deck_wl::Array{Int, 2}, ::Type{T} = Float64) where {T <: Real}
+@everywhere @model function pvl_delta(actions::Matrix{Int}, N::Int, Tsubj::Vector{Int}, deck_payoffs::Array{Float64, 2}, deck_wl::Array{Int, 2}, ::Type{T} = Float64) where {T <: Real}
     min_pos_float = T(0.0 + eps(0.0))
     zero_t = T(0.0)
     one_t = T(1.0)
     onefive_t = T(1.5)
-    max_trials = maximum(Tsubj)
     # min_pos_float = 1e-15 # eps is giving problems, for now set it to a very low value
     # Group Level Parameters
     # Group level Shape mean
@@ -156,28 +174,19 @@ ad_val(x::ReverseDiff.TrackedReal{V, D, O}) where {V, D, O} = ReverseDiff.value(
     # Loss-Aversion
     w_pr ~ filldist(Normal(wμ, wσ; check_args=false), N)
 
-    # from code for Steingroever, doesn't match paper values
-    # A = Φₐₚₚᵣₒₓ.(A_pr)
-    # a = Φₐₚₚᵣₒₓ.(a_pr)
-    # c = Φₐₚₚᵣₒₓ.(c_pr) .* 5
-    # w = Φₐₚₚᵣₒₓ.(w_pr) .* 5
-
     A = normpdf.(0, 1, A_pr)
     a = normpdf.(0, 1, a_pr)
-    c = normpdf.(0, 1, c_pr) .* 5
+    θ = normpdf.(0, 1, c_pr) .* 5
     w = normpdf.(0, 1, w_pr) .* 5
     
-    θ = 3 .^ c .- 1
 
     # create actions matrix if using the model for simulation
     # if actions === missing
     #     actions = Matrix{Union{Missing, Int}}(undef, N, max_trials)
     # end
 
-    # vectorize calcualtion of Xₜᴾ values
-    adjusted_deck_payoffs = abs.(deck_payoffs) .^ A
     # vectorize calculation of prospect utility
-    uₖ = (deck_wl .* -w .* adjusted_deck_payoffs) .+ ((1 .- deck_wl) .* adjusted_deck_payoffs)
+    uₖ = (deck_wl .* -w .* abs.(deck_payoffs) .^ A) .+ ((1 .- deck_wl) .* abs.(deck_payoffs) .^ A)
 
     for s in 1:N
         # set expected values to 0
@@ -185,23 +194,19 @@ ad_val(x::ReverseDiff.TrackedReal{V, D, O}) where {V, D, O} = ReverseDiff.value(
         # set initial probabilities all to 0.25
         Pₖ = fill(T(0.25), 4)
         # set initial action
-        # @inbounds Turing.@addlogprob! loglikelihood(action_dist, actions[s,1])
         @inbounds actions[s, 1] ~ Categorical(Pₖ; check_args=false)
+        
         # loop over trials
         @inbounds n_trials = Tsubj[s] - 1
         @inbounds a_s = a[s]
         @inbounds θ_s = θ[s]
         for t in 1:n_trials
-            @inbounds k = actions[s, t]
-
             # delta learning rule
-            @inbounds Evₖ[k] += a_s * (uₖ[s, t+1] - Evₖ[k])
-            exp_values = exp.((Evₖ .* θ_s) .- maximum(Evₖ .* θ_s))
+            @inbounds Evₖ[actions[s, t]] = (1 - a_s) * Evₖ[actions[s, t]] + a_s * uₖ[s, t]
 
             # update probabilities
-            Pₖ = exp_values / sum(exp_values)
+            Pₖ = softmax(Evₖ .* θ_s)
 
-            # @inbounds Turing.@addlogprob! loglikelihood(action_dist, actions[s,t+1])
             @inbounds actions[s, t+1] ~ Categorical(Pₖ; check_args=false)            
         end
     end
@@ -216,7 +221,7 @@ ad_val(x::ReverseDiff.TrackedReal{V, D, O}) where {V, D, O} = ReverseDiff.value(
     # @info "w_pr: ", w_pr
     # @info "actions: ", actions
 
-    return (y_pred, )
+    return (actions, )
 end
 
 
@@ -361,14 +366,14 @@ for (pat, n) in zip(pats, n_subj)
         for i in 1:n_chains
 
             random_params::Vector{Float64} = [
-                rand(Normal(0, 1)),
-                rand(Uniform(min_pos_float, 1.5)),
-                rand(Normal(0, 1)),
-                rand(Uniform(min_pos_float, 1.5)),
-                rand(Normal(0, 1)),
-                rand(Uniform(min_pos_float, 1.5)),
-                rand(Normal(0, 1)),
-                rand(Uniform(min_pos_float, 1.5)),
+                rand(Normal(0, 0.2)),
+                rand(Uniform(min_pos_float, 0.2)),
+                rand(Normal(0, 0.2)),
+                rand(Uniform(min_pos_float, 0.2)),
+                rand(Normal(0, 0.2)),
+                rand(Uniform(min_pos_float, 0.2)),
+                rand(Normal(0, 0.2)),
+                rand(Uniform(min_pos_float, 0.2)),
             ]
             random_params_1 = Vector{Float64}(undef, N)
             random_params_2 = Vector{Float64}(undef, N)
@@ -406,8 +411,9 @@ for (pat, n) in zip(pats, n_subj)
         n_chains,
         progress=progress,
         verbose=verbose;
-        save_state=false,
+        save_state=true,
         initial_params=estimated_params,
+        thinning=thinning
     )
 
     chains[pat_id] = chain

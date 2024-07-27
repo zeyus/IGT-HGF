@@ -14,10 +14,11 @@ delete_existing_chains = false
 skip_existing_chains = true
 
 n_chains = 3
-n_samples = 20_000
-n_warmup = 10_000
-adapt_delta = 0.5
-thinning = 1
+n_samples = 3_000
+n_retry = 10
+n_warmup = 1_500
+adapt_delta = 0.75
+thinning = 1 # this isn't necessary, in the paper they used 5
 max_depth=20
 
 
@@ -29,7 +30,7 @@ data {
     int<lower=1> n_t_max;                       // max # trials per subject
     array[n_s] int<lower=1> n_t;                      // # trials per subject
     array[n_s, n_t_max] int<lower=1,upper=4> choice;  // # subj. x # trials matrix with choices
-    array[n_s, n_t_max] int<lower=0,upper=1> trial_wl; // # subj. x # trials matrix with wins/losses
+    matrix<lower=0,upper=1>[n_s, n_t_max] trial_wl; // # subj. x # trials matrix with wins/losses
     matrix<lower=-2000,upper=2000>[n_s, n_t_max] net;  // Net amount of wins + losses   
 }
 
@@ -54,7 +55,7 @@ parameters {
 }
 
 transformed parameters {
-    matrix[n_s, n_t_max] adjusted_net;
+    
 
     real<lower=0,upper=1> mu_A;   
     real<lower=0,upper=5> mu_w;
@@ -77,10 +78,6 @@ transformed parameters {
     w_ind = Phi(w_ind_pr) * 5;
     a_ind = Phi(a_ind_pr);
     c_ind = Phi(c_ind_pr) * 5;
-
-    for (s in 1:n_s) {
-       adjusted_net[s] = abs(net[s]) .^ A_ind[s];
-    }
     
 }
 
@@ -88,7 +85,7 @@ model {
     vector[4] p;
     vector[4] Ev;
     real theta;
-    real v;
+    row_vector[n_t_max] v;
 
     // Prior on the group-level mean parameters
     mu_A_pr ~ normal(0, 1);
@@ -108,10 +105,9 @@ model {
     a_ind_pr ~ normal(mu_a_pr, sd_a);
     c_ind_pr ~ normal(mu_c_pr, sd_c);
 
-
     for (s in 1:n_s) {  // loop over subjects
-        theta = pow(3, c_ind[s]) - 1;
-
+        theta = c_ind[s];
+        v = (trial_wl[s] .* -w_ind[s] .* (abs(net[s]) .^ A_ind[s])) + ((1 - trial_wl[s]) .* (abs(net[s]) .^ A_ind[s]));
         // Trial 1
         for (d in 1:4) {
             p[d] = 0.25;
@@ -119,43 +115,77 @@ model {
         }
         choice[s,1] ~ categorical(p);
         // manually specify loglikelihood (maybe the problem is the matrix containing choices outside??)
-        // target += categorical_lpmf(choice[s, 1] | p);
-        print(\"target = \", target());
+        // target += categorical_logit_lpmf(choice[s, 1] | p);
+        // print loglikelihood
+        // print(\"Loglikelihood: \", categorical_logit_lpmf(choice[s, 1] | p), \"\\n\");
+        // print(\"target = \", target());
         // Remaining trials
         for (t in 1:(n_t[s] - 1)) {
-            // if (net[s,t] >= 0) {
-            //     v = pow(net[s,t], A_ind[s]);
-            // } else {
-            //     v = -1 * w_ind[s] * pow(abs(net[s,t]), A_ind[s]);
-            // }
-           
-            v = (trial_wl[s, t] * -w_ind[s] * adjusted_net[s, t]) + ((1 - trial_wl[s, t]) * adjusted_net[s, t]);
-            Ev[choice[s, t]] = (1 - a_ind[s]) * Ev[choice[s, t]] + a_ind[s] * v;
+            
+            Ev[choice[s, t]] = (1 - a_ind[s]) * Ev[choice[s, t]] + a_ind[s] * v[t];
             
             p = softmax(Ev * theta);
+            
             choice[s, t + 1] ~ categorical(p);
             // manually specify loglikelihood
-            // target += categorical_lpmf(choice[s, t + 1] | p);
-            // print loglikelihood
-            // print(\"Loglikelihood: \", categorical_lpmf(choice[s, t + 1] | p), \"\\n\");
-            // print a predicted draw vs actual
-            //print(\"Predicted probs: \", p, \" Actual: \", choice[s, t + 1], \"\\n\");
-            // print(\"target = \", );
+            // target += categorical_logit_lpmf(choice[s, t + 1] | p);
+            // check if target() is -Inf
+           
         }
     }
 }
 "
 
+
+# if (sum(p) != 1) {
+#     // print sum of p
+#     print(\"Sum of probs: \", sum(p), \"\\n\");
+#     print(\"p: \", p, \"\\n\");
+#     print(\"Ev: \", Ev, \"\\n\");
+#     print(\"v: \", v, \"\\n\");
+#     print(\"Loglikelihood: \", categorical_logit_lpmf(choice[s, t + 1] | p), \"\\n\");
+#     print(\"A_ind: \", A_ind[s], \"\\n\");
+#     print(\"w_ind: \", w_ind[s], \"\\n\");
+#     print(\"a_ind: \", a_ind[s], \"\\n\");
+#     print(\"c_ind: \", c_ind[s], \"\\n\");
+#     print(\"net: \", net[s,t], \"\\n\");
+#     print(\"theta: \", theta, \"\\n\");
+#     print(\"t: \", t, \"\\n\");
+#     print(\"s: \", s, \"\\n\");
+#     print(\"n_t: \", n_t[s], \"\\n\");
+#     print(\"choice: \", choice[s, t], \"\\n\");
+#     reject(\"bad PROBS\");
+# }
+
+# if (is_inf(target())) {
+#     print(\"target = \", target());
+#     print(\"Loglikelihood: \", categorical_logit_lpmf(choice[s, t + 1] | p), \"\\n\");
+#     print(\"Predicted probs: \", p, \" Actual: \", choice[s, t + 1], \"\\n\");
+#     print(\"Ev: \", Ev, \"\\n\");
+#     print(\"v: \", v, \"\\n\");
+#     print(\"A_ind: \", A_ind[s], \"\\n\");
+#     print(\"w_ind: \", w_ind[s], \"\\n\");
+#     print(\"a_ind: \", a_ind[s], \"\\n\");
+#     print(\"c_ind: \", c_ind[s], \"\\n\");
+#     print(\"net: \", net[s,t], \"\\n\");
+#     print(\"theta: \", theta, \"\\n\");
+#     print(\"t: \", t, \"\\n\");
+#     print(\"s: \", s, \"\\n\");
+#     print(\"n_t: \", n_t[s], \"\\n\");
+#     print(\"choice: \", choice[s, t + 1], \"\\n\");
+#     reject(\"bad\");
+# }
+
 function init(n_s::Int)
     init_params = Dict{String, Any}(
-        "mu_A_pr" => rand(Normal(0,1)),
-        "mu_w_pr" => rand(Normal(0,1)),
-        "mu_a_pr" => rand(Normal(0,1)),
-        "mu_c_pr" => rand(Normal(0,1)),
-        "sd_A" => rand(Exponential(1.0)),
-        "sd_w" => rand(Exponential(1.0)),
-        "sd_a" => rand(Exponential(1.0)),
-        "sd_c" => rand(Exponential(1.0)),
+        "mu_A_pr" => rand(Normal(0,0.5)),
+        "mu_w_pr" => rand(Normal(0,0.5)),
+        "mu_a_pr" => rand(Normal(0,0.5)),
+        "mu_c_pr" => rand(Normal(0,0.5)),
+        "sd_A" => rand(Uniform(0.001, 0.2)),
+        "sd_w" => rand(Uniform(0.001, 0.2)),
+        "sd_a" => rand(Uniform(0.001, 0.2)),
+        "sd_c" => rand(Uniform(0.001, 0.2)),
     )
     init_params["A_ind_pr"] = rand(Normal(init_params["mu_A_pr"], init_params["sd_A"]), n_s)
     init_params["w_ind_pr"] = rand(Normal(init_params["mu_w_pr"], init_params["sd_w"]), n_s)
@@ -273,6 +303,8 @@ for (pat, n) in zip(pats, n_subj)
     @info "Loading subject wins, losses, and payoffs..."
     for (i, subj) in enumerate(subjs)
         subj_data = trial_data_pat[trial_data_pat.subj_uid .== subj, :]
+        # clamp outcome to -2000, 2000 (some were 2090, but let's just pretend they don't exist, still more range than the -450, 450 in the paper)
+        subj_data.outcome = clamp.(subj_data.outcome, -2000, 2000)
         @inbounds choice[i, 1:Tsubj[i]] = subj_data.choice
         @inbounds deck_payoffs[i, 1:Tsubj[i]] = subj_data.outcome
         @inbounds deck_wl[i, 1:Tsubj[i]] = Int.(subj_data.outcome .< 0)
@@ -291,45 +323,54 @@ for (pat, n) in zip(pats, n_subj)
 
     model = SampleModel("PVLDelta", PVLDeltaSteingroeverModel, pwd() * "\\.tmp")
 
-    @info "Sampling for $pat..."
-    rc = stan_sample(
-        model,
-        data=observed_data,
-        init=init(N),
-        use_cpp_chains=false,
-        num_chains=n_chains,
-        num_threads=4,
-        num_samples=n_samples,
-        num_warmups=n_warmup,
-        delta=adapt_delta,
-        engine=:nuts,
-        algorithm=:hmc,
-        thin=thinning,
-        max_depth=max_depth,
-        sig_figs=18,
-        kappa=0.85,
-        gamma=0.1,
-        show_logging=true,
-        diagnostics=true
-    )
+    for i in 1:n_retry
+        try
+            @info "Sampling for $pat...attempt $i of $n_retry"
+            rc = stan_sample(
+                model,
+                data=observed_data,
+                init=init(N),
+                use_cpp_chains=true,
+                num_chains=n_chains,
+                num_threads=4,
+                num_samples=n_samples,
+                num_warmups=n_warmup,
+                delta=adapt_delta,
+                engine=:nuts,
+                algorithm=:hmc,
+                thin=thinning,
+                max_depth=max_depth,
+                sig_figs=18,
+                kappa=0.75,
+                gamma=0.1,
+                show_logging=true,
+            )
+            if success(rc)
+                @info "Sampling successful."
+                chain = read_samples(model, :mcmcchains)
+                chains[pat_id] = chain
+
+                # save chain
+                @info "Saving chain for $pat..."
+                h5open(chain_out_file, "cw") do file
+                    g = create_group(file, pat_id)
+                    write(g, chain)
+                end
+                break
+            else
+                @error "Sampling failed (attempt $i of $n_retry)."
+                if i == n_retry
+                    @error "Max retries reached, skipping pattern $pat."
+                end
+                continue
+            end
+        catch e
+            @error "Error during sampling: $e"
+            continue
+        end
+    end
     
-    if success(rc)
-        @info "Sampling successful."
-    else
-        @error "Sampling failed."
-        continue
-    end
-    chain = read_samples(model, :mcmcchains)
-
-
-    chains[pat_id] = chain
-
-    # save chain
-    @info "Saving chain for $pat..."
-    h5open(chain_out_file, "cw") do file
-        g = create_group(file, pat_id)
-        write(g, chain)
-    end
+    
     @info "Done with pattern $pat."
 end
 @info "Done."

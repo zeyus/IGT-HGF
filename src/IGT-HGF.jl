@@ -1,6 +1,7 @@
 using LinearAlgebra
-LinearAlgebra.BLAS.set_num_threads(1)  # possible julia/windows bug fix?
-using ReverseDiff, Distributions, Optim, Turing, StatsFuns
+using Feather
+# LinearAlgebra.BLAS.set_num_threads(1)  # possible julia/windows bug fix?
+using Tapir, Distributions, Optim, Turing, StatsFuns
 using ActionModels
 using HierarchicalGaussianFiltering
 using Distributed
@@ -14,19 +15,23 @@ delete_existing_chains = true
 #using StatsFuns
 include("Data.jl")
 
-addprocs(8)
+addprocs(3)
 # include("Data.jl")
+@everywhere using Feather
 @everywhere using LinearAlgebra
-@everywhere LinearAlgebra.BLAS.set_num_threads(1)  # possible julia/windows bug fix?
+# @everywhere LinearAlgebra.BLAS.set_num_threads(1)  # possible julia/windows bug fix?
 @everywhere using HierarchicalGaussianFiltering
 @everywhere using ActionModels
 @everywhere using Distributions
-@everywhere using ReverseDiff
-#@everywhere using StatsFuns
+@everywhere using Tapir
+@everywhere using LogExpFunctions
+# @everywhere using Turing: AutoTapir
+# @everywhere using StatsFuns
 
-@everywhere function noisy_softmax(x::Vector, noise::Real)
-    return exp.(x / noise) / sum(exp.(x / noise))
-end
+autodiff = AutoReverseDiff(compile = true)
+# autodiff = AutoTapir(safe_mode=false)
+# autodiff = AutoForwardDiff()
+
 
 @everywhere function igt_hgf_action(agent::Agent, input::Union{Missing, Real})
     # input is a value, the outcome of the deck, negative or positive
@@ -49,7 +54,7 @@ end
     end
 
     # Expected values come from the HGF
-    expected_values = [
+    deck_predictions = [
         get_states(hgf, ("x1", "prediction_mean")),
         get_states(hgf, ("x2", "prediction_mean")),
         get_states(hgf, ("x3", "prediction_mean")),
@@ -57,168 +62,81 @@ end
     ]
 
     # Expected values are softmaxed with action noise
-    action_probabilities = noisy_softmax(expected_values, action_noise)
+    action_probabilities = softmax(deck_predictions .* action_noise)
+
+    # if any the action probabilities are not between 0 and 1 we throw an error to reject the sample
+    if any(x -> !(0 <= x <= 1), action_probabilities)
+        throw(
+            RejectParameters(
+                "With these parameters and inputs, the action probabilities became $action_probabilities, which should be between 0 and 1. Try other parameter settings",
+            ),
+        )
+    end
+    
 
     # final action distribution is Categorical
     action_distribution = Categorical(action_probabilities)
     return action_distribution    
 end
 
-input_nodes = [
-    "u1",
-    "u2",
-    "u3",
-    "u4",
-]
 
-# can try modelling volatility, but for now it's fixed
-state_nodes = [
-    "x1",
-    "x2",
-    "x3",
-    "x4",
-    # optional
-    # "xvol", # hgf's guess at how much things are changing over time -> huge loss of 1500 might
-]
-
-edges = [
-    Dict(
-        "child" => "u1",
-        "value_parents" => "x1",
-    ),
-    Dict(
-        "child" => "u2",
-        "value_parents" => "x2",
-    ),
-    Dict(
-        "child" => "u3",
-        "value_parents" => "x3",
-    ),
-    Dict(
-        "child" => "u4",
-        "value_parents" => "x4",
-    ),
-    # Dict(
-    #     "child" => "x1",
-    #     "volatility_parents" => "xvol", # shared, otherwise you could xvol1
-    # ),
-
-    # Dict(
-    #     "child" => "x2",
-    #     "volatility_parents" => "xvol",
-    # ),
-    # Dict(
-    #     "child" => "x3",
-    #     "volatility_parents" => "xvol",
-    # ),
-    # Dict(
-    #     "child" => "x4",
-    #     "volatility_parents" => "xvol",
-    # ),
-]
-
-shared_parameters = Dict(
-    # value, names of all derived parameters
-    "u_input_noise" => (
-        1, 
-        [
-            ("u1", "input_noise"),
-            ("u2", "input_noise"),
-            ("u3", "input_noise"),
-            ("u4", "input_noise")
-        ],
-    ),
-    "x_volatility" => (
-        1,
-        [
-            ("x1", "volatility"),
-            ("x2", "volatility"),
-            ("x3", "volatility"),
-            ("x4", "volatility")
-        ],
-    ),
-    "x_autoregression_strength" => (
-        0,
-        [
-            ("x1", "autoregression_strength"),
-            ("x2", "autoregression_strength"),
-            ("x3", "autoregression_strength"),
-            ("x4", "autoregression_strength")
-        ],
-    ),
-    "x_autoregression_target" => (
-        0,
-        [
-            ("x1", "autoregression_target"),
-            ("x2", "autoregression_target"),
-            ("x3", "autoregression_target"),
-            ("x4", "autoregression_target")
-        ],
-    ),
-    "x_initial_mean" => (
-        0,
-        [
-            ("x1", "initial_mean"),
-            ("x2", "initial_mean"),
-            ("x3", "initial_mean"),
-            ("x4", "initial_mean")
-        ],
-    ),
-    "x_drift" => (
-        0,
-        [
-            ("x1", "drift"),
-            ("x2", "drift"),
-            ("x3", "drift"),
-            ("x4", "drift")
-        ],
-    ),
-    "u_value_coupling" => (
-        1,
-        [
-            ("u1", "x1", "value_coupling"),
-            ("u2", "x2", "value_coupling"),
-            ("u3", "x3", "value_coupling"),
-            ("u4", "x4", "value_coupling")
-        ],
-    ),
-    # do same for
-    # strength, target, mean, drift (everything in get_parameters(hgf))
+fixed_parameters = Dict(
+    "volatilities" => 1,
 )
 
-#set_parameters!(hgf, Dict("x_volatility" => 1))
-
-priors = Dict(
-    "action_noise" => Multilevel(:subj, LogNormal, ["action_noise_group_mean", "action_noise_group_sd"]),
-    "action_noise_group_mean" => Normal(),
-    "action_noise_group_sd" => LogNormal(),
-
-    "x_volatility" => Multilevel(:subj, Normal, ["x_volatility_group_mean", "x_volatility_group_sd"]),
-    "x_volatility_group_mean" => Normal(),
-    "x_volatility_group_sd" => LogNormal(0, 0.01),
-
-    "u_input_noise" => Multilevel(:subj, LogNormal, ["u_input_noise_group_mean", "u_input_noise_group_sd"]),
-    "u_input_noise_group_mean" =>  Normal(),
-    "u_input_noise_group_sd" =>  LogNormal(),
-
-
-    # ("x2", "volatility") => Normal(0,1),
-    # ("x3", "volatility") => Normal(0,1),
-    # ("x4", "volatility") => Normal(0,1),
-    # ("u1", "input_noise") => LogNormal(0,1),
-    # ("u2", "input_noise") => LogNormal(0,1),
-    # ("u3", "input_noise") => LogNormal(0,1),
-    # ("u4", "input_noise") => LogNormal(0,1),
+node_defaults = NodeDefaults(
+    bias = 0,
+    input_noise = 1,
+    volatility = 1,
+    coupling_strength = 1,
+    initial_mean = 0,
+    drift = 0,
+    autoconnection_strength = 1,
 )
 
-# get_parameters(agent)
+nodes = [
+    ContinuousInput(name = "u1", input_noise = 1),
+    ContinuousInput(name = "u2", input_noise = 1),
+    ContinuousInput(name = "u3", input_noise = 1),
+    ContinuousInput(name = "u4", input_noise = 1),
+    ContinuousState(name = "x1", volatility = 1, initial_mean = 0, drift = 0),
+    ContinuousState(name = "x2", volatility = 1, initial_mean = 0, drift = 0),
+    ContinuousState(name = "x3", volatility = 1, initial_mean = 0, drift = 0),
+    ContinuousState(name = "x4", volatility = 1, initial_mean = 0, drift = 0),
+]
+
+edges = Dict(
+    ("u1", "x1") => ObservationCoupling(),
+    ("u2", "x2") => ObservationCoupling(),
+    ("u3", "x3") => ObservationCoupling(),
+    ("u4", "x4") => ObservationCoupling(),
+)
+
+
+parameter_groups = [
+    # inputs
+    ParameterGroup("biases", [("u1", "bias"), ("u2", "bias"), ("u3", "bias"), ("u4", "bias")], 0),
+    ParameterGroup("input_noises", [("u1", "input_noise"), ("u2", "input_noise"), ("u3", "input_noise"), ("u4", "input_noise")], 1),
+
+    # states
+    ParameterGroup("volatilities", [("x1", "volatility"), ("x2", "volatility"), ("x3", "volatility"), ("x4", "volatility")], 1),
+    ParameterGroup("initial_means", [("x1", "initial_mean"), ("x2", "initial_mean"), ("x3", "initial_mean"), ("x4", "initial_mean")], 0),
+    ParameterGroup("drifts", [("x1", "drift"), ("x2", "drift"), ("x3", "drift"), ("x4", "drift")], 0),
+    ParameterGroup("autoconnection_strengths", [("x1", "autoconnection_strength"), ("x2", "autoconnection_strength"), ("x3", "autoconnection_strength"), ("x4", "autoconnection_strength")], 1),
+    ParameterGroup("initial_precisions", [("x1", "initial_precision"), ("x2", "initial_precision"), ("x3", "initial_precision"), ("x4", "initial_precision")], 1),
+]
+
 
 hgf = init_hgf(
-    input_nodes = input_nodes,
-    state_nodes = state_nodes,
+    nodes = nodes,
     edges = edges,
-    shared_parameters = shared_parameters,
+    node_defaults = node_defaults,
+    parameter_groups = parameter_groups,
 )
+
+println("HGF Parameters")
+println(get_parameters(hgf))
+
 
 agent = init_agent(
     igt_hgf_action,
@@ -228,66 +146,76 @@ agent = init_agent(
     substruct = hgf,
 )
 
-
-get_parameters(hgf)
-# reset!(agent)
-# input = missing
-# n_trials = 4
-
-
-# for i in 1:n_trials
-   
-#     action = ActionModels.single_input!(agent, input)
-
-#     input = 50 #somefunc(action)
-
-# end
-
-# plot of each four nodes (on same)
-# get_history(agent, [("x2", "posterior_mean"), ])
-
-# plot_trajectory(agent, "x1")
-# plot_trajectory!(agent, "x2")
+println("Agent Parameters")
+println(get_parameters(agent))
 
 
 
+@info "Loading Data..."
+trial_data::DataFrame = DataFrame()
+pats::Vector{Int} = Vector{Int}(undef, 0)
+n_subj::Vector{Int} = Vector{Int}(undef, 0)
 
+cached_data_file = "./data/IGTdataSteingroever2014/IGTdata.feather"
+cached_metadata_file = "./data/IGTdataSteingroever2014/IGTMetadata.h5"
+if isfile(cached_data_file)
+    @info "Loading cached data..."
+    trial_data = Feather.read(cached_data_file)
+    pats, n_subj = h5open(cached_metadata_file, "r") do file
+        pats = read(file, "pats")
+        n_subj = read(file, "n_subj")
+        return pats, n_subj
+    end
+else
+    @info "Cached data not found, loading from RData..."
+    trial_data = load_trial_data("./data/IGTdataSteingroever2014/IGTdata.rdata")
 
-# stuff in a "missing" input to start
-# ...
+    @info "Segmenting Data..."
+    trial_data.choice_pattern_ab = ifelse.(trial_data.ab_ratio .>= 0.65, 1, 0)
+    trial_data.choice_pattern_cd = ifelse.(trial_data.cd_ratio .>= 0.65, 2, 0)
+    trial_data.choice_pattern_bd = ifelse.(trial_data.bd_ratio .>= 0.65, 4, 0)
+    trial_data.choice_pattern_ac = ifelse.(trial_data.ac_ratio .>= 0.65, 8, 0)
 
-trial_data = load_trial_data(
-    "./data/IGTdataSteingroever2014/IGTdata.rdata",
-    true
-)
-# add a "choice pattern" column
-# 1 = CD >= 0.65, 2 = AB >= 0.65, 4 = BD >= 0.65, 8 = AC >= 0.65
-trial_data.choice_pattern_ab = ifelse.(trial_data.ab_ratio .>= 0.65, 1, 0)
-trial_data.choice_pattern_cd = ifelse.(trial_data.cd_ratio .>= 0.65, 2, 0)
-trial_data.choice_pattern_bd = ifelse.(trial_data.bd_ratio .>= 0.65, 4, 0)
-trial_data.choice_pattern_ac = ifelse.(trial_data.ac_ratio .>= 0.65, 8, 0)
+    trial_data.choice_pattern = trial_data.choice_pattern_ab .| trial_data.choice_pattern_cd .| trial_data.choice_pattern_bd .| trial_data.choice_pattern_ac
 
-trial_data.choice_pattern = trial_data.choice_pattern_ab .| trial_data.choice_pattern_cd .| trial_data.choice_pattern_bd .| trial_data.choice_pattern_ac
-# just one subject to test
-#trial_data = trial_data[trial_data.subj .== 1, :]
-#trial_data = trial_data[trial_data.study .== "Steingroever2011", :]
+    # patterns
+    pats = unique(trial_data.choice_pattern)
 
-#patterns
-pats = unique(trial_data.choice_pattern)
+    # get number of unique subjects for each pattern
+    n_subj = [length(unique(trial_data[trial_data.choice_pattern .== pat, :subj])) for pat in pats]
 
-# get number of unique subjects for each pattern
-n_subj = [length(unique(trial_data[trial_data.choice_pattern .== pat, :subj])) for pat in pats]
-
-# print out
-for (pat, n) in zip(pats, n_subj)
-    println("Pattern: $pat, n = $n")
+    # save trial_data, pats and n_subj to file
+    @info "Saving data to cache file..."
+    Feather.write(cached_data_file, trial_data)
+    h5open(cached_metadata_file, "cw") do file
+        write(file, "pats", pats)
+        write(file, "n_subj", n_subj)
+    end
 end
+
+priors = Dict(
+    "action_noise" => Multilevel(
+        :subj,
+        LogNormal,
+        ["action_noise_pattern_mean", "action_noise_pattern_sd"]),
+    "action_noise_pattern_mean" => LogNormal(0.5, 0.5),
+    "action_noise_pattern_sd" => LogNormal(0, 0.1),
+
+    "input_noises" => Multilevel(
+        :subj,
+        LogNormal,
+        ["input_noise_pattern_mean", "input_noise_pattern_sd"]),
+    "input_noise_pattern_sd" => LogNormal(0, 0.1),
+    "input_noise_pattern_mean" => LogNormal(0.5, 0.5),
+)
 
 @everywhere agent = $agent
 @everywhere priors = $priors
+@everywhere fixed_parameters = $fixed_parameters
 @everywhere trial_data = $trial_data
+@everywhere autodiff = $autodiff
 
-sampler = NUTS(; adtype=AutoReverseDiff(true))
+sampler = NUTS(1_500, 0.65; max_depth=20, Δ_max=0.75, init_ϵ = 0.1, adtype=autodiff)
 @everywhere sampler = $sampler
 
 result = fit_model(
@@ -295,16 +223,15 @@ result = fit_model(
     priors,
     trial_data,
     sampler = sampler,
-    independent_group_cols = ["choice_pattern"],
-    multilevel_group_cols = ["subj"],
-    input_cols = ["outcome"],
-    action_cols = ["next_choice"], # use the following row's choice as the action
-    n_cores = 4,
-    #n_chains = 4,
+    independent_group_cols = [:choice_pattern],
+    multilevel_group_cols = [:subj],
+    fixed_parameters = fixed_parameters,
+    input_cols = [:outcome],
+    action_cols = [:next_choice], # use the following row's choice as the action
+    n_cores = 3,
     n_chains = 3,
-    #n_samples = 1000,
-    n_samples = 1000,
-    verbose = false,
+    n_samples = 3_000,
+    verbose = true,
     progress = true
 )
 
@@ -323,63 +250,6 @@ h5open(chain_out_file, "w") do file
     end
 end
 
-
-# save("./data/igt_data_95_chains.jld", "chain", result, compress=true)
-# saved_chain = load("./data/igt_data_95_chains.jld")
-# get_posteriors(result)
-# because we have individual level, the result is a dict of chains
-# try with one example
-
-# result_1 = result["Steingroever2011"]
-# plot(result_1)
-# # save plot to file
-# savefig("figures/igt_steingroever2011_3.png")
-# p1 = get_posteriors(result_1)
-
-# result_2 = result["Fridberg"]
-# plot(result_2)
-# # save plot to file
-# savefig("figures/igt_fridberg_3.png")
-# p2 = get_posteriors(result_2)
-
-# result_3 = result["Horstmann"]
-# plot(result_3)
-# # save plot to file
-# savefig("figures/igt_horstmann_3.png")
-# p3 = get_posteriors(result_3)
-
-# # save chains
-# h5open("./data/igt_data_95_chains.h5", "w") do file
-#     g = create_group(file, "Steingroever2011")
-#     write(g, result_1)
-#     g = create_group(file, "Fridberg")
-#     write(g, result_2)
-#     g = create_group(file, "Horstmann")
-#     write(g, result_3)
-# end
-
-# # test reading back
-# r1_rec = h5open("./data/igt_data_95_chains.h5", "r") do file
-#     read(file["Steingroever2011"], Chains)
-# end
-
-# r2_rec = h5open("./data/igt_data_95_chains.h5", "r") do file
-#     read(file["Fridberg"], Chains)
-# end
-
-# r3_rec = h5open("./data/igt_data_95_chains.h5", "r") do file
-#     read(file["Horstmann"], Chains)
-# end
-
-# plot_trajectory(agent, ("u1", "input_value"))
-
-# print(get_parameters(agent))
-# print(get_states(agent))
-
-# print(get_parameters(hgf))
-# print(get_states(hgf))
-
-# plot_trajectory(hgf, "")
 
 
 rmprocs(workers())
