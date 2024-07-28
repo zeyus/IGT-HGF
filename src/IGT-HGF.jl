@@ -1,6 +1,6 @@
 using LinearAlgebra
 using Feather
-# LinearAlgebra.BLAS.set_num_threads(1)  # possible julia/windows bug fix?
+LinearAlgebra.BLAS.set_num_threads(1)  # possible julia/windows bug fix?
 using Tapir, Distributions, Optim, Turing, StatsFuns
 using ActionModels
 using HierarchicalGaussianFiltering
@@ -19,7 +19,7 @@ addprocs(3)
 # include("Data.jl")
 @everywhere using Feather
 @everywhere using LinearAlgebra
-# @everywhere LinearAlgebra.BLAS.set_num_threads(1)  # possible julia/windows bug fix?
+@everywhere LinearAlgebra.BLAS.set_num_threads(1)  # possible julia/windows bug fix?
 @everywhere using HierarchicalGaussianFiltering
 @everywhere using ActionModels
 @everywhere using Distributions
@@ -31,6 +31,10 @@ addprocs(3)
 autodiff = AutoReverseDiff(compile = true)
 # autodiff = AutoTapir(safe_mode=false)
 # autodiff = AutoForwardDiff()
+
+@everywhere function TruncatedNormal(μ::Real = 0, σ::Real = 1; check_args::Bool = false, a::Real = 0, b::Real = 1)
+    return Truncated(Normal(μ, σ; check_args=check_args), a, b)
+end
 
 
 @everywhere function igt_hgf_action(agent::Agent, input::Union{Missing, Real})
@@ -134,8 +138,8 @@ hgf = init_hgf(
     parameter_groups = parameter_groups,
 )
 
-println("HGF Parameters")
-println(get_parameters(hgf))
+@info "HGF Parameters"
+@info get_parameters(hgf)
 
 
 agent = init_agent(
@@ -146,8 +150,8 @@ agent = init_agent(
     substruct = hgf,
 )
 
-println("Agent Parameters")
-println(get_parameters(agent))
+@info "Agent Parameters"
+@info get_parameters(agent)
 
 
 
@@ -193,21 +197,29 @@ else
     end
 end
 
-priors = Dict(
-    "action_noise" => Multilevel(
-        :subj,
-        LogNormal,
-        ["action_noise_pattern_mean", "action_noise_pattern_sd"]),
-    "action_noise_pattern_mean" => LogNormal(0.5, 0.5),
-    "action_noise_pattern_sd" => LogNormal(0, 0.1),
+# priors = Dict(
+#     "action_noise" => Multilevel(
+#         :subj,
+#         TruncatedNormal,
+#         ["action_noise_pattern_mean", "action_noise_pattern_sd"]),
+#     "action_noise_pattern_mean" => TruncatedNormal(1.0, 1.0),
+#     "action_noise_pattern_sd" => TruncatedNormal(0, 0.01),
 
-    "input_noises" => Multilevel(
-        :subj,
-        LogNormal,
-        ["input_noise_pattern_mean", "input_noise_pattern_sd"]),
-    "input_noise_pattern_sd" => LogNormal(0, 0.1),
-    "input_noise_pattern_mean" => LogNormal(0.5, 0.5),
+#     "input_noises" => Multilevel(
+#         :subj,
+#         TruncatedNormal,
+#         ["input_noise_pattern_mean", "input_noise_pattern_sd"]),
+#     "input_noise_pattern_sd" => TruncatedNormal(0, 0.01),
+#     "input_noise_pattern_mean" => TruncatedNormal(0.0, 1.0),
+# )
+
+
+priors = Dict(
+    "action_noise" => TruncatedNormal(1.0, 1.0),
+    "input_noises" => TruncatedNormal(0.0, 1.0),
 )
+
+Turing.extract_priors
 
 @everywhere agent = $agent
 @everywhere priors = $priors
@@ -218,13 +230,42 @@ priors = Dict(
 sampler = NUTS(1_500, 0.65; max_depth=20, Δ_max=0.75, init_ϵ = 0.1, adtype=autodiff)
 @everywhere sampler = $sampler
 
+# model = fit_model(
+#     agent,
+#     priors,
+#     trial_data,
+#     sampler = sampler,
+#     independent_group_cols = [:choice_pattern],
+#     multilevel_group_cols = [:subj],
+#     fixed_parameters = fixed_parameters,
+#     input_cols = [:outcome],
+#     action_cols = [:next_choice], # use the following row's choice as the action
+#     n_cores = 3,
+#     n_chains = 3,
+#     n_samples = 3_000,
+#     verbose = true,
+#     progress = true
+# )
+
+# priors = Turing.extract_priors(model)
+
+# print(priors)
+# exit()
+
+# print info about number of patterns/groups and number of subjects in each
+@info "Patterns and Subjects"
+for (pat, n) in zip(pats, n_subj)
+    @info("Pattern: $pat, Subjects: $n")
+end
+
 result = fit_model(
     agent,
     priors,
     trial_data,
     sampler = sampler,
-    independent_group_cols = [:choice_pattern],
-    multilevel_group_cols = [:subj],
+    independent_group_cols = [:subj],
+    # independent_group_cols = [:choice_pattern],
+    # multilevel_group_cols = [:subj],
     fixed_parameters = fixed_parameters,
     input_cols = [:outcome],
     action_cols = [:next_choice], # use the following row's choice as the action
@@ -238,7 +279,7 @@ result = fit_model(
 chain_out_file = "./data/igt_hgf_data_chains.h5"
 # save chains
 if delete_existing_chains && isfile(chain_out_file)
-    print("Deleting file: $chain_out_file")
+    @warn "Deleting file: $chain_out_file"
     rm(chain_out_file)
 end
 h5open(chain_out_file, "w") do file
