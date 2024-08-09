@@ -8,6 +8,7 @@ using Distributed
 using HDF5
 using MCMCChains
 using MCMCChainsStorage
+using StatsBase
 
 
 delete_existing_chains = true
@@ -85,7 +86,7 @@ end
 
 
 fixed_parameters = Dict(
-    "volatilities" => 1,
+    # "volatilities" => 1,
 )
 
 node_defaults = NodeDefaults(
@@ -123,7 +124,7 @@ parameter_groups = [
     ParameterGroup("input_noises", [("u1", "input_noise"), ("u2", "input_noise"), ("u3", "input_noise"), ("u4", "input_noise")], 1),
 
     # states
-    ParameterGroup("volatilities", [("x1", "volatility"), ("x2", "volatility"), ("x3", "volatility"), ("x4", "volatility")], 1),
+    # ParameterGroup("volatilities", [("x1", "volatility"), ("x2", "volatility"), ("x3", "volatility"), ("x4", "volatility")], 1),
     ParameterGroup("initial_means", [("x1", "initial_mean"), ("x2", "initial_mean"), ("x3", "initial_mean"), ("x4", "initial_mean")], 0),
     ParameterGroup("drifts", [("x1", "drift"), ("x2", "drift"), ("x3", "drift"), ("x4", "drift")], 0),
     ParameterGroup("autoconnection_strengths", [("x1", "autoconnection_strength"), ("x2", "autoconnection_strength"), ("x3", "autoconnection_strength"), ("x4", "autoconnection_strength")], 1),
@@ -197,29 +198,74 @@ else
     end
 end
 
-# priors = Dict(
-#     "action_noise" => Multilevel(
-#         :subj,
-#         TruncatedNormal,
-#         ["action_noise_pattern_mean", "action_noise_pattern_sd"]),
-#     "action_noise_pattern_mean" => TruncatedNormal(1.0, 1.0),
-#     "action_noise_pattern_sd" => TruncatedNormal(0, 0.01),
-
-#     "input_noises" => Multilevel(
-#         :subj,
-#         TruncatedNormal,
-#         ["input_noise_pattern_mean", "input_noise_pattern_sd"]),
-#     "input_noise_pattern_sd" => TruncatedNormal(0, 0.01),
-#     "input_noise_pattern_mean" => TruncatedNormal(0.0, 1.0),
-# )
-
-
 priors = Dict(
-    "action_noise" => TruncatedNormal(1.0, 1.0),
-    "input_noises" => TruncatedNormal(0.0, 1.0),
+    "action_noise" => Multilevel(
+        :subj,
+        TruncatedNormal,
+        ["action_noise_pattern_mean", "action_noise_pattern_sd"]),
+    "action_noise_pattern_mean" => TruncatedNormal(1.0, 1.0),
+    "action_noise_pattern_sd" => TruncatedNormal(0, 0.01),
+
+    "input_noises" => Multilevel(
+        :subj,
+        TruncatedNormal,
+        ["input_noise_pattern_mean", "input_noise_pattern_sd"]),
+    "input_noise_pattern_sd" => TruncatedNormal(0, 0.01),
+    "input_noise_pattern_mean" => TruncatedNormal(0.0, 1.0),
+    # "volatilities" => Multilevel(
+    #     :subj,
+    #     TruncatedNormal,
+    #     ["volatility_pattern_mean", "volatility_pattern_sd"]),
+    ("x1", "volatility") => Multilevel(
+        :subj,
+        TruncatedNormal,
+        ["volatility_pattern_mean", "volatility_pattern_sd"]),
+    ("x2", "volatility") => Multilevel(
+        :subj,
+        TruncatedNormal,
+        ["volatility_pattern_mean", "volatility_pattern_sd"]),
+    ("x3", "volatility") => Multilevel(
+        :subj,
+        TruncatedNormal,
+        ["volatility_pattern_mean", "volatility_pattern_sd"]),
+    ("x4", "volatility") => Multilevel(
+        :subj,
+        TruncatedNormal,
+        ["volatility_pattern_mean", "volatility_pattern_sd"]),
+    "volatility_pattern_mean" => TruncatedNormal(1.0, 1.0),
+    "volatility_pattern_sd" => TruncatedNormal(0, 0.01),
+    "initial_means" => Multilevel(
+        :subj,
+        TruncatedNormal,
+        ["initial_mean_pattern_mean", "initial_mean_pattern_sd"]),
+    "initial_mean_pattern_mean" => TruncatedNormal(0.0, 1.0),
+    "initial_mean_pattern_sd" => TruncatedNormal(0, 0.01),
+    "drifts" => Multilevel(
+        :subj,
+        TruncatedNormal,
+        ["drift_pattern_mean", "drift_pattern_sd"]),
+    "drift_pattern_mean" => TruncatedNormal(0.0, 1.0),
+    "drift_pattern_sd" => TruncatedNormal(0, 0.01),
+    "autoconnection_strengths" => Multilevel(
+        :subj,
+        TruncatedNormal,
+        ["autoconnection_strength_pattern_mean", "autoconnection_strength_pattern_sd"]),
+    "autoconnection_strength_pattern_mean" => TruncatedNormal(1.0, 1.0),
+    "autoconnection_strength_pattern_sd" => TruncatedNormal(0, 0.01),
+    "initial_precisions" => Multilevel(
+        :subj,
+        TruncatedNormal,
+        ["initial_precision_pattern_mean", "initial_precision_pattern_sd"]),
+    "initial_precision_pattern_mean" => TruncatedNormal(1.0, 1.0),
+    "initial_precision_pattern_sd" => TruncatedNormal(0, 0.01),
 )
 
-Turing.extract_priors
+
+# priors = Dict(
+#     "action_noise" => TruncatedNormal(1.0, 1.0),
+#     "input_noises" => TruncatedNormal(0.0, 1.0),
+# )
+
 
 @everywhere agent = $agent
 @everywhere priors = $priors
@@ -256,27 +302,37 @@ sampler = NUTS(1_500, 0.65; max_depth=20, Δ_max=0.75, init_ϵ = 0.1, adtype=aut
 @info "Patterns and Subjects"
 for (pat, n) in zip(pats, n_subj)
     @info("Pattern: $pat, Subjects: $n")
+    # standardize outcome between -1 and 1 (keeping 0 as zero) by pattern
+    @info "Normalizing outcome between -1 and 1..."
+    max_abs_outcome = maximum(abs.(trial_data[trial_data.choice_pattern .== pat, :outcome]))
+    trial_data[trial_data.choice_pattern .== pat, :outcome] = trial_data[trial_data.choice_pattern .== pat, :outcome] ./ max_abs_outcome
 end
+
+# # standardize outcome between -1 and 1
+# max_abs_outcome = maximum(abs.(trial_data.outcome))
+# trial_data.outcome = trial_data.outcome ./ max_abs_outcome
+# @info "Normalizing outcome between -1 and 1..."
+
 
 result = fit_model(
     agent,
     priors,
     trial_data,
     sampler = sampler,
-    independent_group_cols = [:subj],
-    # independent_group_cols = [:choice_pattern],
-    # multilevel_group_cols = [:subj],
-    fixed_parameters = fixed_parameters,
+    # independent_group_cols = [:subj],
+    independent_group_cols = [:choice_pattern],
+    multilevel_group_cols = [:subj],
+    # fixed_parameters = fixed_parameters,
     input_cols = [:outcome],
     action_cols = [:next_choice], # use the following row's choice as the action
     n_cores = 3,
     n_chains = 3,
-    n_samples = 3_000,
+    n_iterations = 3_000,
     verbose = true,
-    progress = true
+    progress = true,
 )
 
-chain_out_file = "./data/igt_hgf_data_chains.h5"
+chain_out_file = "./data/igt_hgf_multilevel_multiparam_data_chains.h5"
 # save chains
 if delete_existing_chains && isfile(chain_out_file)
     @warn "Deleting file: $chain_out_file"

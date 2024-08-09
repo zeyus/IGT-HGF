@@ -28,11 +28,16 @@ end
     # verbose sampling output
     verbose = true
 
+    # parallel or serial
     parallel = true
+
+    # use threads (true) or processes (false) (only if parallel is true)
     threads = true
 
     # use Optim to estimate starting parameter values
     optim_param_est = false
+
+    # type of estimation to use maximum likelihood estimation (:mle) or maximum a posteriori estimation (:map)
     optim_est_type = :mle  # :mle or :map
 
     # if not using Optim, should we generate random starting parameters?
@@ -58,32 +63,33 @@ end
     end
     # set AD backend
     # @info "Using Enzyme as AD backend..."
+    # Enzyme.API.runtimeActivity!(true)
     # adtype = AutoEnzyme()
     # @info "Using Tapir as AD backend..."
     # adtype = AutoTapir(; safe_mode=false)
-    @info "Using ReverseDiff as AD backend..."
-    adtype = AutoReverseDiff(; compile=true)
-    # @info "Using Zygote as AD backend..."
-    # adtype = AutoZygote()
+    # @info "Using ReverseDiff as AD backend..."
+    # adtype = AutoReverseDiff(; compile=true)
+    @info "Using Zygote as AD backend..."
+    adtype = AutoZygote()
     # @info "Using ForwardDiff as AD backend..."
     # adtype = AutoForwardDiff()
     # number of warmup samples
     n_warmup = 1_500
     # target acceptance rate
-    target_accept = 0.75
+    target_accept = 0.45
     # max tree depth
     max_depth = 20
     # initial step size
-    init_ϵ = 0.05 # if 0, turing will try to estimate it
+    init_ϵ = 0.0 # if 0.0, turing will try to estimate it
     # max divergence during doubling
     # Δ_max = 
     # @info "Using NUTS Sampler with $n_warmup warmup samples, $target_accept target acceptance rate, $max_depth max tree depth, and $init_ϵ initial step size."
-    # sampler = NUTS(
-    #     n_warmup, # warmup samples
-    #     target_accept; # target acceptance rate
-    #     max_depth=max_depth, # max tree depth
-    #     init_ϵ=init_ϵ, # initial step size
-    #     adtype=adtype) 
+    sampler = NUTS(
+        n_warmup, # warmup samples
+        target_accept; # target acceptance rate
+        max_depth=max_depth, # max tree depth
+        init_ϵ=init_ϵ, # initial step size
+        adtype=adtype) 
     # # @info "Using HMCDA Sampler..."
     # sampler = HMCDA(
     #     n_warmup, # n adapt steps
@@ -91,12 +97,12 @@ end
     #     0.3; # target leapfrog length
     #     adtype=adtype
     # )
-    @info "Using HMC Sampler..."
-    sampler = HMC(
-        0.05, # step size
-        10; # number of steps
-        adtype=adtype
-    )
+    # @info "Using HMC Sampler..."
+    # sampler = HMC(
+    #     0.45, # step size
+    #     20; # number of steps
+    #     adtype=adtype
+    # )
     # @info "Using Particle Gibbs Sampler...(NOT WORKING)"
     # sampler = PG(
     #     10
@@ -207,6 +213,9 @@ Turing.setprogress!(progress)
             # update probabilities
             Pₖ = softmax(Evₖ .* θ_s)
 
+            # if any of Pk is > 1 or < 0, reject the sample
+
+
             @inbounds actions[s, t+1] ~ Categorical(Pₖ; check_args=false)            
         end
     end
@@ -275,7 +284,7 @@ else
     end
 end
 
-chain_out_file = "./data/igt_pvldelta_data_chains.h5"
+chain_out_file = "./data/igt_pvldelta_data_chains_normalized.h5"
 
 # delete chain file if it exists
 processed_patterns = []
@@ -298,6 +307,16 @@ elseif skip_existing_chains && isfile(chain_out_file)
         @info pats
         return pats
     end
+end
+
+# print info about number of patterns/groups and number of subjects in each
+@info "Patterns and Subjects"
+for (pat, n) in zip(pats, n_subj)
+    @info("Pattern: $pat, Subjects: $n")
+    # standardize outcome between -1 and 1 (keeping 0 as zero) by pattern
+    @info "Normalizing outcome between -1 and 1..."
+    max_abs_outcome = maximum(abs.(trial_data[trial_data.choice_pattern .== pat, :outcome]))
+    trial_data[trial_data.choice_pattern .== pat, :outcome] = trial_data[trial_data.choice_pattern .== pat, :outcome] ./ max_abs_outcome
 end
 
 chains::Dict{String, Chains} = Dict()
