@@ -13,13 +13,13 @@ include("src/LogCommon.jl")
 delete_existing_chains = false
 skip_existing_chains = true
 
-n_chains = 3
+n_chains = 4
 n_samples = 3_000
 n_retry = 10
 n_warmup = 1_500
-adapt_delta = 0.75
+adapt_delta = 0.9
 thinning = 1 # this isn't necessary, in the paper they used 5
-max_depth=20
+max_depth = 15
 
 
 
@@ -31,7 +31,7 @@ data {
     array[n_s] int<lower=1> n_t;                      // # trials per subject
     array[n_s, n_t_max] int<lower=1,upper=4> choice;  // # subj. x # trials matrix with choices
     matrix<lower=0,upper=1>[n_s, n_t_max] trial_wl; // # subj. x # trials matrix with wins/losses
-    matrix<lower=-2000,upper=2000>[n_s, n_t_max] net;  // Net amount of wins + losses   
+    matrix<lower=-1,upper=1>[n_s, n_t_max] net;  // Net amount of wins + losses   
 }
 
 parameters {
@@ -300,11 +300,14 @@ for (pat, n) in zip(pats, n_subj)
     deck_payoffs = zeros(Float64, N, maximum(Tsubj))
     # deck_wl = Array{Int, 3}(undef, N, maximum(Tsubj), 4)
     deck_wl = zeros(Int, N, maximum(Tsubj))
+    # we can standardize the outcome for all the trials in this pattern (keeping 0 = 0) and range -1 to 1
+    max_abs_outcome = maximum(abs.(trial_data_pat.outcome))
+    trial_data_pat.outcome = trial_data_pat.outcome ./ max_abs_outcome
     @info "Loading subject wins, losses, and payoffs..."
     for (i, subj) in enumerate(subjs)
         subj_data = trial_data_pat[trial_data_pat.subj_uid .== subj, :]
         # clamp outcome to -2000, 2000 (some were 2090, but let's just pretend they don't exist, still more range than the -450, 450 in the paper)
-        subj_data.outcome = clamp.(subj_data.outcome, -2000, 2000)
+        # subj_data.outcome = clamp.(subj_data.outcome, -2000, 2000)
         @inbounds choice[i, 1:Tsubj[i]] = subj_data.choice
         @inbounds deck_payoffs[i, 1:Tsubj[i]] = subj_data.outcome
         @inbounds deck_wl[i, 1:Tsubj[i]] = Int.(subj_data.outcome .< 0)
@@ -320,8 +323,11 @@ for (pat, n) in zip(pats, n_subj)
     @info "Done."
 
     @info "Creating model for pattern $pat..."
-
-    model = SampleModel("PVLDelta", PVLDeltaSteingroeverModel, pwd() * "\\.tmp")
+    model_dir = pwd() * "/.tmp"
+    if !isdir(model_dir)
+        mkdir(model_dir)
+    end
+    model = SampleModel("PVLDelta", PVLDeltaSteingroeverModel, model_dir)
 
     for i in 1:n_retry
         try
@@ -342,8 +348,10 @@ for (pat, n) in zip(pats, n_subj)
                 max_depth=max_depth,
                 sig_figs=18,
                 kappa=0.75,
-                gamma=0.1,
+                gamma=0.05,
                 show_logging=true,
+                # stepsize=0.3,
+                # stepsize_jitter=0.1,
             )
             if success(rc)
                 @info "Sampling successful."

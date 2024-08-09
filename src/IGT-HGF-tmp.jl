@@ -15,7 +15,7 @@ delete_existing_chains = true
 # using JLD
 #using StatsFuns
 include("Data.jl")
-num_procs = 24
+num_procs = 29
 addprocs(num_procs)
 # include("Data.jl")
 @everywhere using Feather
@@ -202,65 +202,16 @@ else
 end
 
 priors = Dict(
-    "action_noise" => Multilevel(
-        :subj,
-        TruncatedNormal,
-        ["action_noise_pattern_mean", "action_noise_pattern_sd"]),
-    "action_noise_pattern_mean" => TruncatedNormal(1.0, 1.0),
-    "action_noise_pattern_sd" => TruncatedNormal(0, 0.01),
-
-    "input_noises" => Multilevel(
-        :subj,
-        TruncatedNormal,
-        ["input_noise_pattern_mean", "input_noise_pattern_sd"]),
-    "input_noise_pattern_sd" => TruncatedNormal(0, 0.01),
-    "input_noise_pattern_mean" => TruncatedNormal(0.0, 1.0),
-    # "volatilities" => Multilevel(
-    #     :subj,
-    #     TruncatedNormal,
-    #     ["volatility_pattern_mean", "volatility_pattern_sd"]),
-    ("x1", "volatility") => Multilevel(
-        :subj,
-        TruncatedNormal,
-        ["volatility_pattern_mean", "volatility_pattern_sd"]),
-    ("x2", "volatility") => Multilevel(
-        :subj,
-        TruncatedNormal,
-        ["volatility_pattern_mean", "volatility_pattern_sd"]),
-    ("x3", "volatility") => Multilevel(
-        :subj,
-        TruncatedNormal,
-        ["volatility_pattern_mean", "volatility_pattern_sd"]),
-    ("x4", "volatility") => Multilevel(
-        :subj,
-        TruncatedNormal,
-        ["volatility_pattern_mean", "volatility_pattern_sd"]),
-    "volatility_pattern_mean" => TruncatedNormal(1.0, 1.0),
-    "volatility_pattern_sd" => TruncatedNormal(0, 0.01),
-    "initial_means" => Multilevel(
-        :subj,
-        TruncatedNormal,
-        ["initial_mean_pattern_mean", "initial_mean_pattern_sd"]),
-    "initial_mean_pattern_mean" => TruncatedNormal(0.0, 1.0),
-    "initial_mean_pattern_sd" => TruncatedNormal(0, 0.01),
-    "drifts" => Multilevel(
-        :subj,
-        TruncatedNormal,
-        ["drift_pattern_mean", "drift_pattern_sd"]),
-    "drift_pattern_mean" => TruncatedNormal(0.0, 1.0),
-    "drift_pattern_sd" => TruncatedNormal(0, 0.01),
-    "autoconnection_strengths" => Multilevel(
-        :subj,
-        TruncatedNormal,
-        ["autoconnection_strength_pattern_mean", "autoconnection_strength_pattern_sd"]),
-    "autoconnection_strength_pattern_mean" => TruncatedNormal(1.0, 1.0),
-    "autoconnection_strength_pattern_sd" => TruncatedNormal(0, 0.01),
-    "initial_precisions" => Multilevel(
-        :subj,
-        TruncatedNormal,
-        ["initial_precision_pattern_mean", "initial_precision_pattern_sd"]),
-    "initial_precision_pattern_mean" => TruncatedNormal(1.0, 1.0),
-    "initial_precision_pattern_sd" => TruncatedNormal(0, 0.01),
+    "action_noise" => TruncatedNormal(1.0, 0.01),
+    "input_noises" => TruncatedNormal(0, 0.01),
+    ("x1", "volatility") => TruncatedNormal(0.5, 1.0),
+    ("x2", "volatility") => TruncatedNormal(0.5, 1.0),
+    ("x3", "volatility") => TruncatedNormal(0.5, 1.0),
+    ("x4", "volatility") => TruncatedNormal(0.5, 1.0),
+    "initial_means" => TruncatedNormal(0.5, 1.0),
+    "drifts" => TruncatedNormal(0.5, 1.0),
+    "autoconnection_strengths" => TruncatedNormal(0.5, 1.0),
+    "initial_precisions" => TruncatedNormal(1.0, 1.0),
 )
 
 
@@ -322,9 +273,9 @@ result = fit_model(
     priors,
     trial_data,
     sampler = sampler,
-    # independent_group_cols = [:subj],
-    independent_group_cols = [:choice_pattern],
-    multilevel_group_cols = [:subj],
+    independent_group_cols = [:subj],
+    # independent_group_cols = [:choice_pattern],
+    # multilevel_group_cols = [:subj],
     # fixed_parameters = fixed_parameters,
     input_cols = [:outcome],
     action_cols = [:next_choice], # use the following row's choice as the action
@@ -335,7 +286,7 @@ result = fit_model(
     progress = true,
 )
 
-chain_out_file = "./data/igt_hgf_multilevel_multiparam_data_chains.h5"
+chain_out_file = "./data/igt_hgf_by_subj_multiparam_data_chains.h5"
 # save chains
 if delete_existing_chains && isfile(chain_out_file)
     @warn "Deleting file: $chain_out_file"
@@ -344,7 +295,7 @@ end
 h5open(chain_out_file, "w") do file
     # save a group for each result (choice_pattern)
     for (pat, chain) in result
-        out_group = "pat_$pat"
+        out_group = "subj_$pat"
         g = create_group(file, out_group)
         write(g, chain)
     end
