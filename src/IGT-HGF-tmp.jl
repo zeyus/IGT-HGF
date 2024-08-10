@@ -204,7 +204,7 @@ else
 end
 
 priors = Dict(
-    "action_noise" => TruncatedNormal(1.0, 0.01),
+    "action_noise" => TruncatedNormal(0.5, 1.00; a = 0, b = 20),
     "volatilities" => TruncatedNormal(0.5, 1.0),
     "drifts" => TruncatedNormal(0.5, 1.0),
 )
