@@ -15,7 +15,7 @@ delete_existing_chains = true
 # using JLD
 #using StatsFuns
 include("Data.jl")
-num_procs = 29
+num_procs = 39
 addprocs(num_procs)
 # include("Data.jl")
 @everywhere using Feather
@@ -88,20 +88,35 @@ end
 end
 
 
-fixed_parameters = Dict(
-    # "volatilities" => 1,
-)
+parameter_groups = [
+    # inputs
+    ParameterGroup("biases", [("u1", "bias"), ("u2", "bias"), ("u3", "bias"), ("u4", "bias")], 0),
+    ParameterGroup("input_noises", [("u1", "input_noise"), ("u2", "input_noise"), ("u3", "input_noise"), ("u4", "input_noise")], 1),
 
+    # states
+    ParameterGroup("volatilities", [("x1", "volatility"), ("x2", "volatility"), ("x3", "volatility"), ("x4", "volatility")], 1),
+    ParameterGroup("initial_means", [("x1", "initial_mean"), ("x2", "initial_mean"), ("x3", "initial_mean"), ("x4", "initial_mean")], 0),
+    ParameterGroup("drifts", [("x1", "drift"), ("x2", "drift"), ("x3", "drift"), ("x4", "drift")], 0),
+    ParameterGroup("autoconnection_strengths", [("x1", "autoconnection_strength"), ("x2", "autoconnection_strength"), ("x3", "autoconnection_strength"), ("x4", "autoconnection_strength")], 1),
+    ParameterGroup("initial_precisions", [("x1", "initial_precision"), ("x2", "initial_precision"), ("x3", "initial_precision"), ("x4", "initial_precision")], 1),
+]
 node_defaults = NodeDefaults(
     bias = 0,
-    input_noise = 1,
+    input_noise = 0,
     volatility = 1,
     coupling_strength = 1,
-    initial_mean = 0,
     drift = 0,
     autoconnection_strength = 1,
+    initial_precision = 1,
+    initial_mean = 0.25,
 )
-
+fixed_parameters = Dict(
+    "biases" => 0,
+    "input_noises" => 0,
+    "autoconnection_strengths" => 1,
+    "initial_precisions" => 1,
+    "initial_means" => 0.25,
+)
 nodes = [
     ContinuousInput(name = "u1", input_noise = 1),
     ContinuousInput(name = "u2", input_noise = 1),
@@ -120,19 +135,6 @@ edges = Dict(
     ("u4", "x4") => ObservationCoupling(),
 )
 
-
-parameter_groups = [
-    # inputs
-    ParameterGroup("biases", [("u1", "bias"), ("u2", "bias"), ("u3", "bias"), ("u4", "bias")], 0),
-    ParameterGroup("input_noises", [("u1", "input_noise"), ("u2", "input_noise"), ("u3", "input_noise"), ("u4", "input_noise")], 1),
-
-    # states
-    # ParameterGroup("volatilities", [("x1", "volatility"), ("x2", "volatility"), ("x3", "volatility"), ("x4", "volatility")], 1),
-    ParameterGroup("initial_means", [("x1", "initial_mean"), ("x2", "initial_mean"), ("x3", "initial_mean"), ("x4", "initial_mean")], 0),
-    ParameterGroup("drifts", [("x1", "drift"), ("x2", "drift"), ("x3", "drift"), ("x4", "drift")], 0),
-    ParameterGroup("autoconnection_strengths", [("x1", "autoconnection_strength"), ("x2", "autoconnection_strength"), ("x3", "autoconnection_strength"), ("x4", "autoconnection_strength")], 1),
-    ParameterGroup("initial_precisions", [("x1", "initial_precision"), ("x2", "initial_precision"), ("x3", "initial_precision"), ("x4", "initial_precision")], 1),
-]
 
 
 hgf = init_hgf(
@@ -203,15 +205,8 @@ end
 
 priors = Dict(
     "action_noise" => TruncatedNormal(1.0, 0.01),
-    "input_noises" => TruncatedNormal(0, 0.01),
-    ("x1", "volatility") => TruncatedNormal(0.5, 1.0),
-    ("x2", "volatility") => TruncatedNormal(0.5, 1.0),
-    ("x3", "volatility") => TruncatedNormal(0.5, 1.0),
-    ("x4", "volatility") => TruncatedNormal(0.5, 1.0),
-    "initial_means" => TruncatedNormal(0.5, 1.0),
+    "volatilities" => TruncatedNormal(0.5, 1.0),
     "drifts" => TruncatedNormal(0.5, 1.0),
-    "autoconnection_strengths" => TruncatedNormal(0.5, 1.0),
-    "initial_precisions" => TruncatedNormal(1.0, 1.0),
 )
 
 
@@ -276,7 +271,7 @@ result = fit_model(
     independent_group_cols = [:subj],
     # independent_group_cols = [:choice_pattern],
     # multilevel_group_cols = [:subj],
-    # fixed_parameters = fixed_parameters,
+    fixed_parameters = fixed_parameters,
     input_cols = [:outcome],
     action_cols = [:next_choice], # use the following row's choice as the action
     n_cores = num_procs,
@@ -286,7 +281,7 @@ result = fit_model(
     progress = true,
 )
 
-chain_out_file = "./data/igt_hgf_by_subj_multiparam_data_chains.h5"
+chain_out_file = "./data/igt_hgf_by_subj_simplified_multiparam_data_chains.h5"
 # save chains
 if delete_existing_chains && isfile(chain_out_file)
     @warn "Deleting file: $chain_out_file"

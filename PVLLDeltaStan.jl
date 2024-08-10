@@ -13,13 +13,13 @@ include("src/LogCommon.jl")
 delete_existing_chains = false
 skip_existing_chains = true
 
-n_chains = 4
+n_chains = 3
 n_samples = 3_000
 n_retry = 10
 n_warmup = 1_500
-adapt_delta = 0.9
+adapt_delta = 0.8 # default 0.8
 thinning = 1 # this isn't necessary, in the paper they used 5
-max_depth = 15
+max_depth = 15 # default 10
 
 
 
@@ -338,7 +338,7 @@ for (pat, n) in zip(pats, n_subj)
                 init=init(N),
                 use_cpp_chains=true,
                 num_chains=n_chains,
-                num_threads=4,
+                num_threads=8,
                 num_samples=n_samples,
                 num_warmups=n_warmup,
                 delta=adapt_delta,

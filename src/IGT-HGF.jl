@@ -88,19 +88,8 @@ end
 end
 
 
-fixed_parameters = Dict(
-    # "volatilities" => 1,
-)
 
-node_defaults = NodeDefaults(
-    bias = 0,
-    input_noise = 1,
-    volatility = 1,
-    coupling_strength = 1,
-    initial_mean = 0,
-    drift = 0,
-    autoconnection_strength = 1,
-)
+
 
 nodes = [
     ContinuousInput(name = "u1", input_noise = 1),
@@ -127,12 +116,29 @@ parameter_groups = [
     ParameterGroup("input_noises", [("u1", "input_noise"), ("u2", "input_noise"), ("u3", "input_noise"), ("u4", "input_noise")], 1),
 
     # states
-    # ParameterGroup("volatilities", [("x1", "volatility"), ("x2", "volatility"), ("x3", "volatility"), ("x4", "volatility")], 1),
+    ParameterGroup("volatilities", [("x1", "volatility"), ("x2", "volatility"), ("x3", "volatility"), ("x4", "volatility")], 1),
     ParameterGroup("initial_means", [("x1", "initial_mean"), ("x2", "initial_mean"), ("x3", "initial_mean"), ("x4", "initial_mean")], 0),
     ParameterGroup("drifts", [("x1", "drift"), ("x2", "drift"), ("x3", "drift"), ("x4", "drift")], 0),
     ParameterGroup("autoconnection_strengths", [("x1", "autoconnection_strength"), ("x2", "autoconnection_strength"), ("x3", "autoconnection_strength"), ("x4", "autoconnection_strength")], 1),
     ParameterGroup("initial_precisions", [("x1", "initial_precision"), ("x2", "initial_precision"), ("x3", "initial_precision"), ("x4", "initial_precision")], 1),
 ]
+node_defaults = NodeDefaults(
+    bias = 0,
+    input_noise = 0,
+    volatility = 1,
+    coupling_strength = 1,
+    drift = 0,
+    autoconnection_strength = 1,
+    initial_precision = 1,
+    initial_mean = 0.25,
+)
+fixed_parameters = Dict(
+    "biases" => 0,
+    "input_noises" => 0,
+    "autoconnection_strengths" => 1,
+    "initial_precisions" => 1,
+    "initial_means" => 0.25,
+)
 
 
 hgf = init_hgf(
@@ -209,58 +215,58 @@ priors = Dict(
     "action_noise_pattern_mean" => TruncatedNormal(1.0, 1.0),
     "action_noise_pattern_sd" => TruncatedNormal(0, 0.01),
 
-    "input_noises" => Multilevel(
+    # "input_noises" => Multilevel(
+    #     :subj,
+    #     TruncatedNormal,
+    #     ["input_noise_pattern_mean", "input_noise_pattern_sd"]),
+    # "input_noise_pattern_sd" => TruncatedNormal(0, 0.01),
+    # "input_noise_pattern_mean" => TruncatedNormal(0.0, 1.0),
+    "volatilities" => Multilevel(
         :subj,
         TruncatedNormal,
-        ["input_noise_pattern_mean", "input_noise_pattern_sd"]),
-    "input_noise_pattern_sd" => TruncatedNormal(0, 0.01),
-    "input_noise_pattern_mean" => TruncatedNormal(0.0, 1.0),
-    # "volatilities" => Multilevel(
+        ["volatility_pattern_mean", "volatility_pattern_sd"]),
+    # ("x1", "volatility") => Multilevel(
     #     :subj,
     #     TruncatedNormal,
     #     ["volatility_pattern_mean", "volatility_pattern_sd"]),
-    ("x1", "volatility") => Multilevel(
-        :subj,
-        TruncatedNormal,
-        ["volatility_pattern_mean", "volatility_pattern_sd"]),
-    ("x2", "volatility") => Multilevel(
-        :subj,
-        TruncatedNormal,
-        ["volatility_pattern_mean", "volatility_pattern_sd"]),
-    ("x3", "volatility") => Multilevel(
-        :subj,
-        TruncatedNormal,
-        ["volatility_pattern_mean", "volatility_pattern_sd"]),
-    ("x4", "volatility") => Multilevel(
-        :subj,
-        TruncatedNormal,
-        ["volatility_pattern_mean", "volatility_pattern_sd"]),
+    # ("x2", "volatility") => Multilevel(
+    #     :subj,
+    #     TruncatedNormal,
+    #     ["volatility_pattern_mean", "volatility_pattern_sd"]),
+    # ("x3", "volatility") => Multilevel(
+    #     :subj,
+    #     TruncatedNormal,
+    #     ["volatility_pattern_mean", "volatility_pattern_sd"]),
+    # ("x4", "volatility") => Multilevel(
+    #     :subj,
+    #     TruncatedNormal,
+    #     ["volatility_pattern_mean", "volatility_pattern_sd"]),
     "volatility_pattern_mean" => TruncatedNormal(1.0, 1.0),
     "volatility_pattern_sd" => TruncatedNormal(0, 0.01),
-    "initial_means" => Multilevel(
-        :subj,
-        TruncatedNormal,
-        ["initial_mean_pattern_mean", "initial_mean_pattern_sd"]),
-    "initial_mean_pattern_mean" => TruncatedNormal(0.0, 1.0),
-    "initial_mean_pattern_sd" => TruncatedNormal(0, 0.01),
+    # "initial_means" => Multilevel(
+    #     :subj,
+    #     TruncatedNormal,
+    #     ["initial_mean_pattern_mean", "initial_mean_pattern_sd"]),
+    # "initial_mean_pattern_mean" => TruncatedNormal(0.0, 1.0),
+    # "initial_mean_pattern_sd" => TruncatedNormal(0, 0.01),
     "drifts" => Multilevel(
         :subj,
         TruncatedNormal,
         ["drift_pattern_mean", "drift_pattern_sd"]),
     "drift_pattern_mean" => TruncatedNormal(0.0, 1.0),
     "drift_pattern_sd" => TruncatedNormal(0, 0.01),
-    "autoconnection_strengths" => Multilevel(
-        :subj,
-        TruncatedNormal,
-        ["autoconnection_strength_pattern_mean", "autoconnection_strength_pattern_sd"]),
-    "autoconnection_strength_pattern_mean" => TruncatedNormal(1.0, 1.0),
-    "autoconnection_strength_pattern_sd" => TruncatedNormal(0, 0.01),
-    "initial_precisions" => Multilevel(
-        :subj,
-        TruncatedNormal,
-        ["initial_precision_pattern_mean", "initial_precision_pattern_sd"]),
-    "initial_precision_pattern_mean" => TruncatedNormal(1.0, 1.0),
-    "initial_precision_pattern_sd" => TruncatedNormal(0, 0.01),
+    # "autoconnection_strengths" => Multilevel(
+    #     :subj,
+    #     TruncatedNormal,
+    #     ["autoconnection_strength_pattern_mean", "autoconnection_strength_pattern_sd"]),
+    # "autoconnection_strength_pattern_mean" => TruncatedNormal(1.0, 1.0),
+    # "autoconnection_strength_pattern_sd" => TruncatedNormal(0, 0.01),
+    # "initial_precisions" => Multilevel(
+    #     :subj,
+    #     TruncatedNormal,
+    #     ["initial_precision_pattern_mean", "initial_precision_pattern_sd"]),
+    # "initial_precision_pattern_mean" => TruncatedNormal(1.0, 1.0),
+    # "initial_precision_pattern_sd" => TruncatedNormal(0, 0.01),
 )
 
 
@@ -325,7 +331,7 @@ result = fit_model(
     # independent_group_cols = [:subj],
     independent_group_cols = [:choice_pattern],
     multilevel_group_cols = [:subj],
-    # fixed_parameters = fixed_parameters,
+    fixed_parameters = fixed_parameters,
     input_cols = [:outcome],
     action_cols = [:next_choice], # use the following row's choice as the action
     n_cores = num_procs,
