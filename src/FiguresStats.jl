@@ -1,4 +1,5 @@
 using HDF5, MCMCChains, MCMCChainsStorage, Turing
+using Turing: AbstractMCMC
 using Plots, StatsPlots
 using ActionModels
 using Feather
@@ -129,6 +130,52 @@ names(hgf_chains["subj_97"])
 plot_parameter_distribution(hgf_chains["subj_97"],priors_unilevel)
 plot(hgf_chains["subj_97"])
 get_posteriors(hgf_chains["subj_97"])
+
+# now we group all of the subjects for each pattern
+# we will then compare the group level differences
+hgf_chains_grouped = Dict()
+for (pat, label) in pats
+    subj_ids = unique(trial_data[trial_data[!, :choice_pattern] .== pat, :subj])
+    str_subj_ids = string.(subj_ids)
+    str_subj_ids = ["subj_$id" for id in str_subj_ids]
+    subj_chains = [hgf_chains[id] for id in str_subj_ids]
+    hgf_chains_grouped[label] = chainscat(subj_chains...)
+end
+plot(hgf_chains_grouped["preference_AB"])
+plot(hgf_chains_grouped["preference_CD"])
+plot(hgf_chains_grouped["no_preference"])
+
+plot_parameter_distribution(hgf_chains_grouped["preference_AB"],priors_unilevel)
+plot_parameter_distribution(hgf_chains_grouped["preference_CD"],priors_unilevel)
+plot_parameter_distribution(hgf_chains_grouped["no_preference"],priors_unilevel)
+
+
+# plot deck choices for each pattern on a single plot
+grouped_trial_data = groupby(trial_data, [:choice_pattern, :subj])
+choice_proportion_by_subject = combine(
+    grouped_trial_data,
+    :choice => length => :count,
+)
+choice_proportion_by_subject = groupby(choice_proportion_by_subject, [:choice_pattern, :subj])
+
+choice_proportion_by_subject = combine(
+    choice_proportion_by_subject,
+    :choice,
+    :count => (x -> x ./ sum(x)) => :proportion,
+)
+
+groupedhist(
+    choice_proportion_by_subject,
+    :proportion,
+    group = :choice_pattern,
+    bins = 0:0.1:1,
+    layout = 2,
+    legend = :topleft,
+    title = "Deck Choices by Pattern",
+    xlabel = "Proportion of Choices",
+    ylabel = "Frequency",
+)
+
 # # print parameters from each model (we only need a single chain and pattern)
 # for pat in keys(pats)
 #     println("Pattern: $(pats[pat])")
@@ -152,6 +199,8 @@ get_posteriors(hgf_chains["subj_97"])
 #     Symbol("Aσ"),
 # ]
 
+
+
 pvldelta_selected_params_sym::Vector{Symbol} = [
     Symbol("mu_A_pr"),
     Symbol("sd_A"),
@@ -163,10 +212,22 @@ pvldelta_selected_params_sym::Vector{Symbol} = [
     Symbol("sd_a"),
 ]
 
+priors_pvldelta = Dict{String, Any}(
+    "mu_A_pr" => Normal(0, 1),
+    "mu_w_pr" => Normal(0, 1),
+    "mu_a_pr" => Normal(0, 1),
+    "mu_c_pr" => Normal(0, 1),
+    "sd_A" => Uniform(1, 1.5),
+    "sd_w" => Uniform(1, 1.5),
+    "sd_a" => Uniform(1, 1.5),
+    "sd_c" => Uniform(1, 1.5),
+)
+
 pvldelta_chains[4][:, pvldelta_selected_params_sym, :]
 names(pvldelta_chains[2])
+plot_parameter_distribution(pvldelta_chains[5],priors_pvldelta)
 
-Plots.plot(pvldelta_chains[1][:, pvldelta_selected_params_sym, :])
+# Plots.plot(pvldelta_chains[1][:, pvldelta_selected_params_sym, :])
 
 # Plotting
 for pat in keys(pats)

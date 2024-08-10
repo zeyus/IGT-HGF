@@ -14,7 +14,7 @@ function load_trial_data(
 
     # set trial lengths (str for indices)
     trials_label = ["95", "100", "150"]
-
+    subj_uid = 0
     # Steingroever, H., Fridberg, D. J., Horstmann, A., Kjome, K. L., Kumari, V., Lane, S. D., Maia, T. V., McClelland, J. L., Pachur, T., Premkumar, P., Stout, J. C., Wetzels, R., Wood, S., Worthy, D. A., & Wagenmakers, E.-J. (2015). Data from 617 Healthy Participants Performing the Iowa Gambling Task: A “Many Labs” Collaboration. Journal of Open Psychology Data, 3(1), Article 1. https://doi.org/10.5334/jopd.ak
     scheme_map = Dict(
         "Fridberg" => 1,
@@ -45,6 +45,7 @@ function load_trial_data(
         ab_ratio = Union{Missing, Float64}[],
         bd_ratio = Union{Missing, Float64}[],
         ac_ratio = Union{Missing, Float64}[],
+        subj_uid = Union{Missing, Int}[],
     )
 
     # populate the trial data dictionary
@@ -55,6 +56,7 @@ function load_trial_data(
         losses = Float64.(objs["lo_$l"])
         choice_t = transpose(trunc.(Int, objs["choice_$l"]))
         for i in eachindex(subj)
+            subj_uid += 1
             n_trials = length(losses[i, :])
             CDRatio = (sum(choice_t[:, i] .== 3) + sum(choice_t[:, i] .== 4)) / n_trials
             ABRatio = (sum(choice_t[:, i] .== 1) + sum(choice_t[:, i] .== 2)) / n_trials
@@ -77,6 +79,7 @@ function load_trial_data(
                     ABRatio,
                     BDRatio,
                     ACRatio,
+                    subj_uid,
                 ))
             end
             for j in 1:n_trials
@@ -96,6 +99,7 @@ function load_trial_data(
                     ABRatio,
                     BDRatio,
                     ACRatio,
+                    subj_uid,
                 ))
             end
         end
