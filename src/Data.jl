@@ -45,7 +45,7 @@ function load_trial_data(
         ab_ratio = Union{Missing, Float64}[],
         bd_ratio = Union{Missing, Float64}[],
         ac_ratio = Union{Missing, Float64}[],
-        subj_uid = Union{Missing, Int}[],
+        subj_study = Union{Missing, Int}[],
     )
 
     # populate the trial data dictionary
@@ -65,7 +65,7 @@ function load_trial_data(
             
             if add_missing_input
                 push!(df, (
-                    subj[i],
+                    subj_uid,
                     0,
                     study[i],
                     missing,
@@ -79,13 +79,13 @@ function load_trial_data(
                     ABRatio,
                     BDRatio,
                     ACRatio,
-                    subj_uid,
+                    subj[i],
                 ))
             end
             for j in 1:n_trials
                 next_choice = j < n_trials ? choice_t[j + 1, i] : missing
                 push!(df, (
-                    subj[i],
+                    subj_uid,
                     j,
                     study[i],
                     choice_t[j, i],
@@ -99,7 +99,7 @@ function load_trial_data(
                     ABRatio,
                     BDRatio,
                     ACRatio,
-                    subj_uid,
+                    subj[i],
                 ))
             end
         end
