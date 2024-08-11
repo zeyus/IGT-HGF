@@ -15,7 +15,7 @@ delete_existing_chains = true
 # using JLD
 #using StatsFuns
 include("Data.jl")
-num_procs = 39
+num_procs = 63
 addprocs(num_procs)
 # include("Data.jl")
 @everywhere using Feather
@@ -281,7 +281,7 @@ result = fit_model(
     progress = true,
 )
 
-chain_out_file = "./data/igt_hgf_by_subj_simplified_multiparam_data_chains.h5"
+chain_out_file = "./data/igt_hgf_FIX_subj_simplified_multiparam_data_chains.h5"
 # save chains
 if delete_existing_chains && isfile(chain_out_file)
     @warn "Deleting file: $chain_out_file"

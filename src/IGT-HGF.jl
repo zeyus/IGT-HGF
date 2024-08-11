@@ -15,7 +15,7 @@ delete_existing_chains = true
 # using JLD
 #using StatsFuns
 include("Data.jl")
-num_procs = 24
+num_procs = 32
 addprocs(num_procs)
 # include("Data.jl")
 @everywhere using Feather
