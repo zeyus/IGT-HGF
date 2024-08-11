@@ -45,6 +45,8 @@ function load_trial_data(
         ab_ratio = Union{Missing, Float64}[],
         bd_ratio = Union{Missing, Float64}[],
         ac_ratio = Union{Missing, Float64}[],
+        bc_ratio = Union{Missing, Float64}[],
+        ad_ratio = Union{Missing, Float64}[],
         subj_study = Union{Missing, Int}[],
     )
 
@@ -62,6 +64,8 @@ function load_trial_data(
             ABRatio = (sum(choice_t[:, i] .== 1) + sum(choice_t[:, i] .== 2)) / n_trials
             BDRatio = (sum(choice_t[:, i] .== 2) + sum(choice_t[:, i] .== 4)) / n_trials
             ACRatio = (sum(choice_t[:, i] .== 1) + sum(choice_t[:, i] .== 3)) / n_trials
+            BCRatio = (sum(choice_t[:, i] .== 2) + sum(choice_t[:, i] .== 3)) / n_trials
+            ADRatio = (sum(choice_t[:, i] .== 1) + sum(choice_t[:, i] .== 4)) / n_trials
             
             if add_missing_input
                 push!(df, (
@@ -79,6 +83,8 @@ function load_trial_data(
                     ABRatio,
                     BDRatio,
                     ACRatio,
+                    BCRatio,
+                    ADRatio,
                     subj[i],
                 ))
             end
@@ -99,6 +105,8 @@ function load_trial_data(
                     ABRatio,
                     BDRatio,
                     ACRatio,
+                    BCRatio,
+                    ADRatio,
                     subj[i],
                 ))
             end

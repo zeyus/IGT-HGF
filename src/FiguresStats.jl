@@ -17,15 +17,15 @@ if isfile(cached_data_file)
     end
 end
 # patterns
-pats = Dict(
+pat_map = Dict(
     0 => "no_preference",
     1 => "preference_AB",
     2 => "preference_CD",
     4 => "preference_BD",
     5 => "preference_AB_BD",
-    6 => "preference_CD_BD",
+    6 => "preference_CD_BD", # -> D
     8 => "preference_AC",
-    10 => "preference_AB_AC"
+    10 => "preference_AB_AC" # -> C
 )
 # patterns
 # pats = Dict(
@@ -113,7 +113,7 @@ h5open("data/igt_pvldelta_data_chains_STAN.h5", "r") do file
 end
 
 hgf_chains = Dict()
-h5open("data/igt_hgf_by_subj_simplified_multiparam_data_chains.h5", "r") do file
+h5open("data/igt_hgf_FIX_subj_simplified_multiparam_data_chains.h5", "r") do file
     subj_chains = keys(file)
     for subj in subj_chains
         g = open_group(file, subj)
@@ -134,7 +134,7 @@ get_posteriors(hgf_chains["subj_97"])
 # now we group all of the subjects for each pattern
 # we will then compare the group level differences
 hgf_chains_grouped = Dict()
-for (pat, label) in pats
+for (pat, label) in pat_map
     subj_ids = unique(trial_data[trial_data[!, :choice_pattern] .== pat, :subj])
     str_subj_ids = string.(subj_ids)
     str_subj_ids = ["subj_$id" for id in str_subj_ids]
@@ -154,27 +154,83 @@ plot_parameter_distribution(hgf_chains_grouped["no_preference"],priors_unilevel)
 grouped_trial_data = groupby(trial_data, [:choice_pattern, :subj])
 choice_proportion_by_subject = combine(
     grouped_trial_data,
-    :choice => length => :count,
+    AsTable(
+        :choice,
+    ) => (
+        (x,) -> (
+            choice_prop = [
+                sum(x.choice .== 1) / length(x.choice),
+                sum(x.choice .== 2) / length(x.choice),
+                sum(x.choice .== 3) / length(x.choice),
+                sum(x.choice .== 4) / length(x.choice),
+            ],
+            choice = [
+                "A",
+                "B",
+                "C",
+                "D",
+            ],
+            # choice_prop_A = sum(x.choice .== 1) / length(x.choice),
+            # choice_prop_B = sum(x.choice .== 2) / length(x.choice),
+            # choice_prop_C = sum(x.choice .== 3) / length(x.choice),
+            # choice_prop_D = sum(x.choice .== 4) / length(x.choice),
+        )
+    ) => AsTable,
+    :choice_pattern => (x -> pat_map[x[1]]) => :choice_pattern_lbl,
 )
-choice_proportion_by_subject = groupby(choice_proportion_by_subject, [:choice_pattern, :subj])
 
-choice_proportion_by_subject = combine(
-    choice_proportion_by_subject,
-    :choice,
-    :count => (x -> x ./ sum(x)) => :proportion,
+
+grouped_trial_data_counts = groupby(trial_data, [:choice_pattern, :subj, :choice])
+choice_counts_by_subject = combine(
+    grouped_trial_data_counts,
+    nrow => :count,
 )
 
-groupedhist(
-    choice_proportion_by_subject,
-    :proportion,
-    group = :choice_pattern,
-    bins = 0:0.1:1,
-    layout = 2,
-    legend = :topleft,
-    title = "Deck Choices by Pattern",
-    xlabel = "Proportion of Choices",
-    ylabel = "Frequency",
+groupedbar(choice_proportion_by_subject[!, :choice_prop_A], group=choice_proportion_by_subject[!, :choice_pattern], bar_position=:dodge, bar_width=0.5, bar_spacing=0, xlabel="Pattern", ylabel="Proportion of Choices", title="Deck A Choices by Pattern")
+groupedviolin(
+    choice_proportion_by_subject[!, :choice],
+    choice_proportion_by_subject[!, :choice_prop],
+    group=choice_proportion_by_subject[!, :choice_pattern_lbl],
+    bar_position=:dodge, bar_width=0.5,
+    bar_spacing=0,
+    xlabel="Deck Choice",
+    ylabel="Proportion of Choices",
+    title="Participant Deck Choice Proportions by Pattern",
+    size=(1200, 800),
 )
+
+density(choice_proportion_by_subject[choice_proportion_by_subject.choice_pattern .== 0, :choice_prop_A], label="No Preference A")
+density!(choice_proportion_by_subject[choice_proportion_by_subject.choice_pattern .== 0, :choice_prop_B], label="No Preference B")
+density!(choice_proportion_by_subject[choice_proportion_by_subject.choice_pattern .== 0, :choice_prop_C], label="No Preference C")
+density!(choice_proportion_by_subject[choice_proportion_by_subject.choice_pattern .== 0, :choice_prop_D], label="No Preference D")
+
+density(choice_proportion_by_subject[choice_proportion_by_subject.choice_pattern .== 1, :choice_prop_A], label="Preference AB A")
+density!(choice_proportion_by_subject[choice_proportion_by_subject.choice_pattern .== 1, :choice_prop_B], label="Preference AB B")
+density!(choice_proportion_by_subject[choice_proportion_by_subject.choice_pattern .== 1, :choice_prop_C], label="Preference AB C")
+density!(choice_proportion_by_subject[choice_proportion_by_subject.choice_pattern .== 1, :choice_prop_D], label="Preference AB D")
+
+density(choice_proportion_by_subject[choice_proportion_by_subject.choice_pattern .== 2, :choice_prop_A], label="Preference CD A")
+density!(choice_proportion_by_subject[choice_proportion_by_subject.choice_pattern .== 2, :choice_prop_B], label="Preference CD B")
+density!(choice_proportion_by_subject[choice_proportion_by_subject.choice_pattern .== 2, :choice_prop_C], label="Preference CD C")
+density!(choice_proportion_by_subject[choice_proportion_by_subject.choice_pattern .== 2, :choice_prop_D], label="Preference CD D")
+
+
+density!(trial_data[trial_data.choice_pattern .== 1, :choice], label="Preference AB")
+density!(trial_data[trial_data.choice_pattern .== 2, :choice], label="Preference CD")
+density!(trial_data[trial_data.choice_pattern .== 4, :choice], label="Preference BD")
+density!(trial_data[trial_data.choice_pattern .== 8, :choice], label="Preference AC")
+density!(trial_data[trial_data.choice_pattern .== 5, :choice], label="Preference AB + BD")
+density!(trial_data[trial_data.choice_pattern .== 6, :choice], label="Preference CD + BD")
+
+
+density(choice_proportion_by_subject.choice_prop_A)
+density!(choice_proportion_by_subject.choice_prop_B)
+density!(choice_proportion_by_subject.choice_prop_C)
+density!(choice_proportion_by_subject.choice_prop_D)
+
+# plot deck choices for each pattern on a single plot
+proportions_grouped = groupby(choice_proportion_by_subject, [:choice_pattern, :subj, :choice])
+
 
 # # print parameters from each model (we only need a single chain and pattern)
 # for pat in keys(pats)
