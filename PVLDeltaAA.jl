@@ -144,7 +144,7 @@ Turing.setprogress!(progress)
 
 
 @info "Defining Model..."
-@everywhere @model function pvl_delta(actions::Matrix{Int}, N::Int, Tsubj::Vector{Int}, deck_payoffs::Array{Float64, 2}, deck_wl::Array{Int, 2}, ::Type{T} = Float64) where {T <: Real}
+@everywhere @model function pvl_delta(actions::Union{Matrix{Int}, Missing}, N::Int, Tsubj::Vector{Int}, deck_payoffs::Array{Float64, 2}, deck_wl::Array{Int, 2}, ::Type{T} = Float64) where {T <: Real}
     min_pos_float = T(0.0 + eps(0.0))
     zero_t = T(0.0)
     one_t = T(1.0)
@@ -187,9 +187,11 @@ Turing.setprogress!(progress)
     
 
     # create actions matrix if using the model for simulation
-    # if actions === missing
-    #     actions = Matrix{Union{Missing, Int}}(undef, N, max_trials)
-    # end
+    max_trials = maximum(Tsubj)
+    if actions === missing
+        actions = Matrix{Union{Missing, Int}}(undef, N, max_trials)
+    end
+    action_pred = Matrix{Union{Missing, Int}}(undef, N, max_trials)
 
     # vectorize calculation of prospect utility
     uₖ = (deck_wl .* -w .* abs.(deck_payoffs) .^ A) .+ ((1 .- deck_wl) .* abs.(deck_payoffs) .^ A)
@@ -201,7 +203,7 @@ Turing.setprogress!(progress)
         Pₖ = fill(T(0.25), 4)
         # set initial action
         @inbounds actions[s, 1] ~ Categorical(Pₖ; check_args=false)
-        
+        @inbounds action_pred[s, 1] = rand(Categorical(Pₖ; check_args=false))
         # loop over trials
         @inbounds n_trials = Tsubj[s] - 1
         @inbounds a_s = a[s]
@@ -216,7 +218,8 @@ Turing.setprogress!(progress)
             # if any of Pk is > 1 or < 0, reject the sample
 
 
-            @inbounds actions[s, t+1] ~ Categorical(Pₖ; check_args=false)            
+            @inbounds actions[s, t+1] ~ Categorical(Pₖ; check_args=false)
+            @inbounds action_pred[s, t+1] = rand(Categorical(Pₖ; check_args=false))            
         end
     end
     # debug print out all params and actions
@@ -230,7 +233,7 @@ Turing.setprogress!(progress)
     # @info "w_pr: ", w_pr
     # @info "actions: ", actions
 
-    return (actions, )
+    return (action_pred, )
 end
 
 

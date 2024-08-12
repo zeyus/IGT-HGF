@@ -233,7 +233,10 @@ else
     trial_data.choice_pattern_cd = ifelse.(trial_data.cd_ratio .>= 0.65, 2, 0)
     trial_data.choice_pattern_bd = ifelse.(trial_data.bd_ratio .>= 0.65, 4, 0)
     trial_data.choice_pattern_ac = ifelse.(trial_data.ac_ratio .>= 0.65, 8, 0)
+    trial_data.choice_pattern_bc = ifelse.(trial_data.bc_ratio .>= 0.65, 16, 0)
+    trial_data.choice_pattern_ad = ifelse.(trial_data.ad_ratio .>= 0.65, 32, 0)
 
+    # trial_data.choice_pattern = trial_data.choice_pattern_ab .| trial_data.choice_pattern_cd .| trial_data.choice_pattern_bd .| trial_data.choice_pattern_ac .| trial_data.choice_pattern_bc .| trial_data.choice_pattern_ad
     trial_data.choice_pattern = trial_data.choice_pattern_ab .| trial_data.choice_pattern_cd .| trial_data.choice_pattern_bd .| trial_data.choice_pattern_ac
 
     # patterns

@@ -3,6 +3,9 @@ using Turing: AbstractMCMC
 using Plots, StatsPlots
 using ActionModels
 using Feather
+using ArviZ
+using ArviZ: PSIS
+using CategoricalArrays
 include("Data.jl")
 # using ArviZ, PSIS, ArviZPlots, ArviZPythonPlots
 cached_data_file = "./data/IGTdataSteingroever2014/IGTdata.feather"
@@ -18,14 +21,21 @@ if isfile(cached_data_file)
 end
 # patterns
 pat_map = Dict(
-    0 => "no_preference",
-    1 => "preference_AB",
-    2 => "preference_CD",
-    4 => "preference_BD",
-    5 => "preference_AB_BD",
-    6 => "preference_CD_BD", # -> D
-    8 => "preference_AC",
-    10 => "preference_AB_AC" # -> C
+    2 => "C + D (Good)",
+    1 => "A + B (Bad)",
+    4 => "B + D (Infrequent loss)",
+    8 => "A + C (Frequent loss)",
+    5 => "B", # -> B
+    10 => "C", # -> C
+    6 => "D", # -> D
+    0 => "No Preference",
+    # 16 => "preference_AD",
+    # 17 => "preference_AD_AB", # -> A not C
+    # 18 => "preference_AD_CD", # -> D
+    # 21 => "preference_AD_BD_AB",
+    # 24 => "preference_AD_AC", # -> A
+    # 32 => "preference_BC",
+    # 38 => "preference_CD_BC", # -> B
 )
 # patterns
 # pats = Dict(
@@ -106,11 +116,30 @@ end
 
 pvldelta_chains = Dict()
 h5open("data/igt_pvldelta_data_chains_STAN.h5", "r") do file
-    for pat in keys(pats)
+    for pat in pats
         g = open_group(file, "pattern_$pat")
         pvldelta_chains[pat] = read(g, Chains)
     end
 end
+hhgf_selected_params_sym::Vector{Symbol} = [
+    # Symbol("action_noise"),
+    Symbol("action_noise_pattern_mean"),
+    # Symbol("action_noise_pattern_sd"),
+    # Symbol("volatilities"),
+    Symbol("volatility_pattern_mean"),
+    # Symbol("volatility_pattern_sd"),
+    # Symbol("drifts"),
+    Symbol("drift_pattern_mean"),
+    # Symbol("drift_pattern_sd"),
+]
+hhgf_chains = Dict()
+h5open("data/igt_hgf_multilevel_multiparam_data_chains.h5", "r") do file
+    for pat in pats
+        g = open_group(file, "pat_$pat")
+        hhgf_chains[pat] = read(g, Chains)
+    end
+end
+
 
 hgf_chains = Dict()
 h5open("data/igt_hgf_FIX_subj_simplified_multiparam_data_chains.h5", "r") do file
@@ -121,7 +150,7 @@ h5open("data/igt_hgf_FIX_subj_simplified_multiparam_data_chains.h5", "r") do fil
     end
 end
 priors_unilevel = Dict(
-    "action_noise" => TruncatedNormal(1.0, 0.01),
+    "action_noise" => TruncatedNormal(0.5, 1.00; a = 0, b = 20),
     "volatilities" => TruncatedNormal(0.5, 1.0),
     "drifts" => TruncatedNormal(0.5, 1.0),
 )
@@ -141,13 +170,76 @@ for (pat, label) in pat_map
     subj_chains = [hgf_chains[id] for id in str_subj_ids]
     hgf_chains_grouped[label] = chainscat(subj_chains...)
 end
-plot(hgf_chains_grouped["preference_AB"])
-plot(hgf_chains_grouped["preference_CD"])
-plot(hgf_chains_grouped["no_preference"])
+# plot(hgf_chains_grouped["preference_AB"])
+# plot(hgf_chains_grouped["preference_CD"])
+# plot(hgf_chains_grouped["no_preference"])
 
-plot_parameter_distribution(hgf_chains_grouped["preference_AB"],priors_unilevel)
-plot_parameter_distribution(hgf_chains_grouped["preference_CD"],priors_unilevel)
-plot_parameter_distribution(hgf_chains_grouped["no_preference"],priors_unilevel)
+# plot_parameter_distribution(hgf_chains_grouped["preference_AB"],priors_unilevel)
+# plot_parameter_distribution(hgf_chains_grouped["preference_CD"],priors_unilevel)
+# plot_parameter_distribution(hgf_chains_grouped["no_preference"],priors_unilevel)
+
+name_map = Dict(
+    "action_noise" => "Action Noise",
+    "volatilities" => "Volatility",
+    "drifts" => "Drift",
+)
+priors_unilevel_renamed = Dict(
+    "Action Noise" => priors_unilevel["action_noise"],
+    "Volatility" => priors_unilevel["volatilities"],
+    "Drift" => priors_unilevel["drifts"],
+)
+
+
+p = plot_parameter_distribution(
+    replacenames(hgf_chains_grouped["C + D (Good)"], name_map), priors_unilevel_renamed
+)
+plot(p, size=(1200, 1200), plot_title="C + D (Good)", thickness_scaling = 1.5, legend=false)
+
+# save the plot
+Plots.savefig("figures/igt_hgf_C_D_Good.png")
+
+p = plot_parameter_distribution(replacenames(hgf_chains_grouped["A + B (Bad)"], name_map), priors_unilevel_renamed)
+plot(p, size=(1200, 1200), plot_title="A + B (Bad)", thickness_scaling = 1.5, legend=false)
+
+# save the plot
+Plots.savefig("figures/igt_hgf_A_B_Bad.png")
+
+p = plot_parameter_distribution(replacenames(hgf_chains_grouped["B + D (Infrequent loss)"], name_map), priors_unilevel_renamed)
+plot(p, size=(1200, 1200), plot_title="B + D (Infrequent loss)", thickness_scaling = 1.5, legend=false)
+
+# save the plot
+Plots.savefig("figures/igt_hgf_B_D_Infrequent_loss.png")
+
+p = plot_parameter_distribution(replacenames(hgf_chains_grouped["A + C (Frequent loss)"], name_map), priors_unilevel_renamed)
+plot(p, size=(1200, 1200), plot_title="A + C (Frequent loss)", thickness_scaling = 1.5, legend=false)
+
+# save the plot
+Plots.savefig("figures/igt_hgf_A_C_Frequent_loss.png")
+
+p = plot_parameter_distribution(replacenames(hgf_chains_grouped["B"], name_map), priors_unilevel_renamed)
+plot(p, size=(1200, 1200), plot_title="B", thickness_scaling = 1.5, legend=false)
+
+# save the plot
+Plots.savefig("figures/igt_hgf_B.png")
+
+p = plot_parameter_distribution(replacenames(hgf_chains_grouped["C"], name_map), priors_unilevel_renamed)
+plot(p, size=(1200, 1200), plot_title="C", thickness_scaling = 1.5, legend=false)
+
+# save the plot
+Plots.savefig("figures/igt_hgf_C.png")
+
+p = plot_parameter_distribution(replacenames(hgf_chains_grouped["D"], name_map), priors_unilevel_renamed)
+plot(p, size=(1200, 1200), plot_title="D", thickness_scaling = 1.5, legend=false)
+
+# save the plot
+Plots.savefig("figures/igt_hgf_D.png")
+
+p = plot_parameter_distribution(replacenames(hgf_chains_grouped["No Preference"], name_map), priors_unilevel_renamed)
+plot(p, size=(1200, 1200), plot_title="No Preference", thickness_scaling = 1.5, legend=false)
+
+# save the plot
+Plots.savefig("figures/igt_hgf_No_Preference.png")
+
 
 
 # plot deck choices for each pattern on a single plot
@@ -170,6 +262,12 @@ choice_proportion_by_subject = combine(
                 "C",
                 "D",
             ],
+            count = [
+                sum(x.choice .== 1),
+                sum(x.choice .== 2),
+                sum(x.choice .== 3),
+                sum(x.choice .== 4),
+            ],
             # choice_prop_A = sum(x.choice .== 1) / length(x.choice),
             # choice_prop_B = sum(x.choice .== 2) / length(x.choice),
             # choice_prop_C = sum(x.choice .== 3) / length(x.choice),
@@ -178,16 +276,22 @@ choice_proportion_by_subject = combine(
     ) => AsTable,
     :choice_pattern => (x -> pat_map[x[1]]) => :choice_pattern_lbl,
 )
+choice_proportion_by_subject[!, :choice_pattern_lbl] = categorical(choice_proportion_by_subject[!, :choice_pattern_lbl])
 
+levels!(choice_proportion_by_subject.choice_pattern_lbl, [
+    pat_map[2],
+    pat_map[1],
+    pat_map[4],
+    pat_map[8],
+    pat_map[5],
+    pat_map[10],
+    pat_map[6],
+    pat_map[0],
+])
 
-grouped_trial_data_counts = groupby(trial_data, [:choice_pattern, :subj, :choice])
-choice_counts_by_subject = combine(
-    grouped_trial_data_counts,
-    nrow => :count,
-)
+sort!(choice_proportion_by_subject, [:choice_pattern_lbl, :subj])
 
-groupedbar(choice_proportion_by_subject[!, :choice_prop_A], group=choice_proportion_by_subject[!, :choice_pattern], bar_position=:dodge, bar_width=0.5, bar_spacing=0, xlabel="Pattern", ylabel="Proportion of Choices", title="Deck A Choices by Pattern")
-groupedviolin(
+groupedboxplot(
     choice_proportion_by_subject[!, :choice],
     choice_proportion_by_subject[!, :choice_prop],
     group=choice_proportion_by_subject[!, :choice_pattern_lbl],
@@ -196,40 +300,22 @@ groupedviolin(
     xlabel="Deck Choice",
     ylabel="Proportion of Choices",
     title="Participant Deck Choice Proportions by Pattern",
-    size=(1200, 800),
+    size=(1800, 1400),
+    color_palette = :Set1_8,
+    thickness_scaling = 2.0,
+    linewidth = 1.0,
+    markerstrokewidth = 0.5,
+    margin = (10, :px),
+)
+# add number of samples to each bar (doesn't work)
+choice_counts_by_subject = groupby(choice_proportion_by_subject, [:choice_pattern, :choice])
+choice_counts_by_subject = combine(
+    choice_counts_by_subject,
+    :count => sum => :count,
+    :choice_prop => median,
+    :choice_pattern_lbl => first,
 )
 
-density(choice_proportion_by_subject[choice_proportion_by_subject.choice_pattern .== 0, :choice_prop_A], label="No Preference A")
-density!(choice_proportion_by_subject[choice_proportion_by_subject.choice_pattern .== 0, :choice_prop_B], label="No Preference B")
-density!(choice_proportion_by_subject[choice_proportion_by_subject.choice_pattern .== 0, :choice_prop_C], label="No Preference C")
-density!(choice_proportion_by_subject[choice_proportion_by_subject.choice_pattern .== 0, :choice_prop_D], label="No Preference D")
-
-density(choice_proportion_by_subject[choice_proportion_by_subject.choice_pattern .== 1, :choice_prop_A], label="Preference AB A")
-density!(choice_proportion_by_subject[choice_proportion_by_subject.choice_pattern .== 1, :choice_prop_B], label="Preference AB B")
-density!(choice_proportion_by_subject[choice_proportion_by_subject.choice_pattern .== 1, :choice_prop_C], label="Preference AB C")
-density!(choice_proportion_by_subject[choice_proportion_by_subject.choice_pattern .== 1, :choice_prop_D], label="Preference AB D")
-
-density(choice_proportion_by_subject[choice_proportion_by_subject.choice_pattern .== 2, :choice_prop_A], label="Preference CD A")
-density!(choice_proportion_by_subject[choice_proportion_by_subject.choice_pattern .== 2, :choice_prop_B], label="Preference CD B")
-density!(choice_proportion_by_subject[choice_proportion_by_subject.choice_pattern .== 2, :choice_prop_C], label="Preference CD C")
-density!(choice_proportion_by_subject[choice_proportion_by_subject.choice_pattern .== 2, :choice_prop_D], label="Preference CD D")
-
-
-density!(trial_data[trial_data.choice_pattern .== 1, :choice], label="Preference AB")
-density!(trial_data[trial_data.choice_pattern .== 2, :choice], label="Preference CD")
-density!(trial_data[trial_data.choice_pattern .== 4, :choice], label="Preference BD")
-density!(trial_data[trial_data.choice_pattern .== 8, :choice], label="Preference AC")
-density!(trial_data[trial_data.choice_pattern .== 5, :choice], label="Preference AB + BD")
-density!(trial_data[trial_data.choice_pattern .== 6, :choice], label="Preference CD + BD")
-
-
-density(choice_proportion_by_subject.choice_prop_A)
-density!(choice_proportion_by_subject.choice_prop_B)
-density!(choice_proportion_by_subject.choice_prop_C)
-density!(choice_proportion_by_subject.choice_prop_D)
-
-# plot deck choices for each pattern on a single plot
-proportions_grouped = groupby(choice_proportion_by_subject, [:choice_pattern, :subj, :choice])
 
 
 # # print parameters from each model (we only need a single chain and pattern)
@@ -268,6 +354,13 @@ pvldelta_selected_params_sym::Vector{Symbol} = [
     Symbol("sd_a"),
 ]
 
+pvldelta_selected_params_sym::Vector{Symbol} = [
+    Symbol("mu_w_pr"),
+    Symbol("mu_c_pr"),
+    Symbol("sd_w"),
+    Symbol("sd_c"),
+]
+
 priors_pvldelta = Dict{String, Any}(
     "mu_A_pr" => Normal(0, 1),
     "mu_w_pr" => Normal(0, 1),
@@ -278,6 +371,106 @@ priors_pvldelta = Dict{String, Any}(
     "sd_a" => Uniform(1, 1.5),
     "sd_c" => Uniform(1, 1.5),
 )
+
+
+
+
+# now for the STAN model pvldelta
+
+name_map_pvldelta = Dict(
+    "mu_A_pr" => "A Mean",
+    "sd_A" => "A SD",
+    "mu_w_pr" => "w Mean",
+    "sd_w" => "w SD",
+    "mu_c_pr" => "c Mean",
+    "sd_c" => "c SD",
+    "mu_a_pr" => "a Mean",
+    "sd_a" => "a SD",
+)
+
+priors_pvldelta = Dict(
+    "A Mean" => priors_pvldelta["mu_A_pr"],
+    "A SD" => priors_pvldelta["sd_A"],
+    "w Mean" => priors_pvldelta["mu_w_pr"],
+    "w SD" => priors_pvldelta["sd_w"],
+    "c Mean" => priors_pvldelta["mu_c_pr"],
+    "c SD" => priors_pvldelta["sd_c"],
+    "a Mean" => priors_pvldelta["mu_a_pr"],
+    "a SD" => priors_pvldelta["sd_a"],
+)
+
+p = plot_parameter_distribution(
+    replacenames(pvldelta_chains[2], name_map_pvldelta), priors_pvldelta
+)
+plot(p, size=(1200, 2400), plot_title="C + D (Good)", thickness_scaling = 1.5, legend=false)
+
+# save the plot
+Plots.savefig("figures/igt_pvldelta_C_D_Good.png")
+
+p = plot_parameter_distribution(
+    replacenames(pvldelta_chains[1], name_map_pvldelta), priors_pvldelta
+)
+plot(p, size=(1200, 2400), plot_title="A + B (Bad)", thickness_scaling = 1.5, legend=false)
+
+# save the plot
+Plots.savefig("figures/igt_pvldelta_A_B_Bad.png")
+
+p = plot_parameter_distribution(
+    replacenames(pvldelta_chains[4], name_map_pvldelta), priors_pvldelta
+)
+plot(p, size=(1200, 2400), plot_title="B + D (Infrequent loss)", thickness_scaling = 1.5, legend=false)
+
+# save the plot
+Plots.savefig("figures/igt_pvldelta_B_D_Infrequent_loss.png")
+
+p = plot_parameter_distribution(
+    replacenames(pvldelta_chains[8], name_map_pvldelta), priors_pvldelta
+)
+plot(p, size=(1200, 2400), plot_title="A + C (Frequent loss)", thickness_scaling = 1.5, legend=false)
+
+
+# save the plot
+Plots.savefig("figures/igt_pvldelta_A_C_Frequent_loss.png")
+
+p = plot_parameter_distribution(
+    replacenames(pvldelta_chains[5], name_map_pvldelta), priors_pvldelta
+)
+plot(p, size=(1200, 2400), plot_title="B", thickness_scaling = 1.5, legend=false)
+
+# save the plot
+Plots.savefig("figures/igt_pvldelta_B.png")
+
+p = plot_parameter_distribution(
+    replacenames(pvldelta_chains[10], name_map_pvldelta), priors_pvldelta
+)
+plot(p, size=(1200, 2400), plot_title="C", thickness_scaling = 1.5, legend=false)
+
+# save the plot
+Plots.savefig("figures/igt_pvldelta_C.png")
+
+p = plot_parameter_distribution(
+    replacenames(pvldelta_chains[6], name_map_pvldelta), priors_pvldelta
+)
+plot(p, size=(1200, 2400), plot_title="D", thickness_scaling = 1.5, legend=false)
+
+# save the plot
+Plots.savefig("figures/igt_pvldelta_D.png")
+
+p = plot_parameter_distribution(
+    replacenames(pvldelta_chains[0], name_map_pvldelta), priors_pvldelta
+)
+plot(p, size=(1200, 2400), plot_title="No Preference", thickness_scaling = 1.5, legend=false)
+
+# save the plot
+Plots.savefig("figures/igt_pvldelta_No_Preference.png")
+
+
+
+
+
+
+
+
 
 pvldelta_chains[4][:, pvldelta_selected_params_sym, :]
 names(pvldelta_chains[2])
@@ -297,3 +490,13 @@ for pat in keys(pats)
     # Plots.savefig("figures/igt_hgf_$(replace(pats[pat], " " => "_")).png")
     # break
 end
+
+
+
+
+
+
+idata_turing_post = from_mcmcchains(pvldelta_chains[2])
+
+ArviZ.psis(idata_turing_post.posterior)
+ArviZ.plot_trace(idata_turing_post)
